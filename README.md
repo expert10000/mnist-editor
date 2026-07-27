@@ -27,6 +27,8 @@ npm run verify:generated
 npm run train:generated
 ```
 
+`npm run train:generated` writes the latest generated files and metrics to `generated/`, and stores each training attempt under `runs/<timestamp>_<topology-id>/`.
+
 ## Current Scope
 
 This repository starts with the Phase 1 dashboard prototype:
@@ -51,5 +53,7 @@ This repository starts with the Phase 1 dashboard prototype:
 - generated training metrics surfaced in the UI from `generated/train_metrics.json`;
 - generated training can be launched from the editor UI with configurable sample limits;
 - generated checkpoints saved locally under `generated/`.
+- live generated training progress, logs, and saved run history in the editor UI;
+- stable topology IDs for comparing a saved result with the current canvas.
 
-Next phases will add save/load, undo/redo, generated PyTorch, smoke tests, ablations, and OOF-aware experiment generation.
+Next phases will add ablation queues, richer metric charts, and OOF-aware experiment generation.

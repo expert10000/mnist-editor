@@ -4,6 +4,9 @@ out
 dist
 *.log
 .env*
+*.tsbuildinfo
 __pycache__
 data/
 generated/*.pt
+runs/*
+!runs/.gitkeep

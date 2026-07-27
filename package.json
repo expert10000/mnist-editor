@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "generate": "tsx scripts/generate.ts",
     "verify:generated": "npm run generate && python generated/smoke_test.py",
-    "train:generated": "npm run generate && python scripts/train_generated.py --epochs 1 --train-limit 1024 --test-limit 512 --cpu"
+    "train:generated": "tsx scripts/train-generated.ts"
   },
   "dependencies": {
     "lucide-react": "^1.23.0",

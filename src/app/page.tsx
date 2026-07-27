@@ -11,6 +11,7 @@ import {
   Play,
   Redo2,
   RefreshCw,
+  ScrollText,
   Table2,
   TriangleAlert,
   Trash2,
@@ -19,7 +20,7 @@ import {
   Upload,
   XCircle,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 
 import { generateFiles, type GeneratedFile } from "@/lib/codegen";
 import {
@@ -33,6 +34,7 @@ import {
   type TopologyNode,
   type TopologyProject,
 } from "@/lib/topology";
+import { topologyVersionId } from "@/lib/topologyVersion";
 
 type BottomPanel = "trace" | "validation" | "generated";
 type EditorHistory = { past: TopologyProject[]; present: TopologyProject; future: TopologyProject[] };
@@ -46,18 +48,35 @@ type TrainSettings = {
 };
 type GeneratedTrainMetrics = {
   status: string;
+  run_id?: string;
+  topology_id?: string;
+  created_at?: string;
+  updated_at?: string;
   epochs: number;
   train_limit: number;
   test_limit: number;
-  first_batch_loss: number;
-  final_batch_loss: number;
-  train_loss: number;
-  test_loss: number;
-  test_accuracy: number;
-  checkpoint: string;
-  duration_seconds: number;
-  passed_smoke_rule: boolean;
+  seed?: number;
+  current_epoch?: number;
+  current_batch?: number;
+  total_batches?: number;
+  first_batch_loss: number | null;
+  final_batch_loss: number | null;
+  train_loss: number | null;
+  test_loss: number | null;
+  test_accuracy: number | null;
+  checkpoint?: string;
+  duration_seconds?: number;
+  passed_smoke_rule: boolean | null;
+  error?: string;
 } | null;
+type GeneratedRunSummary = {
+  runId: string;
+  topologyId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  status: string;
+  metrics: NonNullable<GeneratedTrainMetrics>;
+};
 type DragState = {
   nodeId: string;
   startClientX: number;
@@ -77,6 +96,11 @@ export default function Home() {
   const [trainMetrics, setTrainMetrics] = useState<GeneratedTrainMetrics>(null);
   const [metricsBusy, setMetricsBusy] = useState(false);
   const [trainingBusy, setTrainingBusy] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [trainingLogs, setTrainingLogs] = useState<string[]>([]);
+  const [runHistory, setRunHistory] = useState<GeneratedRunSummary[]>([]);
+  const [runsBusy, setRunsBusy] = useState(false);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [trainSettings, setTrainSettings] = useState<TrainSettings>({
     epochs: 1,
     trainLimit: 1024,
@@ -96,10 +120,11 @@ export default function Home() {
   const selectedEdges = project.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id);
   const generatedFiles = useMemo(() => generateFiles(project), [project]);
   const selectedGeneratedFile = generatedFiles.find((file) => file.path === selectedGeneratedPath) ?? generatedFiles[0];
+  const currentTopologyId = useMemo(() => topologyVersionId(project), [project]);
   const branchRepair = getBranchRepair(selectedNode);
   const boardSize = useMemo(() => getBoardSize(project.nodes), [project.nodes]);
 
-  async function loadGeneratedMetrics() {
+  const loadGeneratedMetrics = useCallback(async () => {
     setMetricsBusy(true);
     try {
       const response = await fetch("/api/generated-metrics", { cache: "no-store" });
@@ -108,14 +133,72 @@ export default function Home() {
     } finally {
       setMetricsBusy(false);
     }
-  }
+  }, []);
+
+  const loadGeneratedRuns = useCallback(async () => {
+    setRunsBusy(true);
+    try {
+      const response = await fetch("/api/generated-runs", { cache: "no-store" });
+      const payload = await response.json();
+      setRunHistory(Array.isArray(payload.runs) ? payload.runs : []);
+    } finally {
+      setRunsBusy(false);
+    }
+  }, []);
 
   useEffect(() => {
     void loadGeneratedMetrics();
-  }, []);
+    void loadGeneratedRuns();
+  }, [loadGeneratedMetrics, loadGeneratedRuns]);
+
+  useEffect(() => {
+    if (!trainingBusy || !activeRunId) {
+      return;
+    }
+
+    const runId = activeRunId;
+    let cancelled = false;
+    async function pollRun() {
+      try {
+        const response = await fetch(`/api/train-generated?runId=${encodeURIComponent(runId)}`, { cache: "no-store" });
+        const payload = await response.json();
+        if (cancelled) {
+          return;
+        }
+        if (payload.metrics) {
+          setTrainMetrics(payload.metrics);
+        }
+        if (Array.isArray(payload.logs)) {
+          setTrainingLogs(payload.logs);
+        }
+        if (payload.status === "complete" || payload.status === "failed") {
+          setTrainingBusy(false);
+          setNotice({
+            tone: payload.status === "complete" ? "good" : "bad",
+            text: payload.status === "complete" ? "Generated training completed." : (payload.error ?? "Generated training failed."),
+          });
+          void loadGeneratedMetrics();
+          void loadGeneratedRuns();
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Could not read the live training run." });
+        }
+      }
+    }
+
+    void pollRun();
+    const interval = window.setInterval(() => void pollRun(), 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeRunId, loadGeneratedMetrics, loadGeneratedRuns, trainingBusy]);
 
   async function runGeneratedTraining() {
     setTrainingBusy(true);
+    setTrainingLogs([]);
+    setActiveRunId(null);
     setNotice({ tone: "good", text: "Generated training started." });
     try {
       const response = await fetch("/api/train-generated", {
@@ -127,14 +210,22 @@ export default function Home() {
       if (!response.ok) {
         throw new Error(payload?.error ?? `Training failed with status ${response.status}.`);
       }
+      setActiveRunId(payload.runId ?? null);
       setTrainMetrics(payload.metrics ?? null);
-      setNotice({ tone: "good", text: "Generated training completed." });
+      setTrainingLogs(Array.isArray(payload.logs) ? payload.logs : []);
+      setSelectedRunId(payload.runId ?? null);
+      setNotice({ tone: "good", text: "Generated training is running." });
     } catch (error) {
       setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Generated training failed." });
-    } finally {
       setTrainingBusy(false);
-      void loadGeneratedMetrics();
+    } finally {
+      void loadGeneratedRuns();
     }
+  }
+
+  function refreshTrainingState() {
+    void loadGeneratedMetrics();
+    void loadGeneratedRuns();
   }
 
   function updateNodeParameter(nodeId: string, key: string, value: boolean | number | string) {
@@ -474,10 +565,17 @@ export default function Home() {
         metrics={trainMetrics}
         metricsBusy={metricsBusy}
         trainingBusy={trainingBusy}
+        activeRunId={activeRunId}
+        logs={trainingLogs}
+        runHistory={runHistory}
+        runsBusy={runsBusy}
+        selectedRunId={selectedRunId}
+        currentTopologyId={currentTopologyId}
         settings={trainSettings}
         onSettingsChange={setTrainSettings}
-        onRefresh={loadGeneratedMetrics}
+        onRefresh={refreshTrainingState}
         onRun={runGeneratedTraining}
+        onSelectRun={setSelectedRunId}
       />
 
       <section className="workspace">
@@ -709,22 +807,46 @@ function GeneratedTrainingPanel({
   metrics,
   metricsBusy,
   trainingBusy,
+  activeRunId,
+  logs,
+  runHistory,
+  runsBusy,
+  selectedRunId,
+  currentTopologyId,
   settings,
   onSettingsChange,
   onRefresh,
   onRun,
+  onSelectRun,
 }: {
   metrics: GeneratedTrainMetrics;
   metricsBusy: boolean;
   trainingBusy: boolean;
+  activeRunId: string | null;
+  logs: string[];
+  runHistory: GeneratedRunSummary[];
+  runsBusy: boolean;
+  selectedRunId: string | null;
+  currentTopologyId: string;
   settings: TrainSettings;
   onSettingsChange: (settings: TrainSettings) => void;
   onRefresh: () => void;
   onRun: () => void;
+  onSelectRun: (runId: string | null) => void;
 }) {
   function updateSetting<K extends keyof TrainSettings>(key: K, value: TrainSettings[K]) {
     onSettingsChange({ ...settings, [key]: value });
   }
+
+  const selectedRun = runHistory.find((run) => run.runId === selectedRunId);
+  const displayedMetrics = selectedRun?.metrics ?? metrics;
+  const progress =
+    displayedMetrics?.total_batches && displayedMetrics.total_batches > 0
+      ? Math.min(100, Math.round(((displayedMetrics.current_batch ?? 0) / displayedMetrics.total_batches) * 100))
+      : displayedMetrics?.status === "complete"
+        ? 100
+        : 0;
+  const topologyMatches = displayedMetrics?.topology_id ? displayedMetrics.topology_id === currentTopologyId : undefined;
 
   return (
     <section className="trainingPanel">
@@ -744,6 +866,25 @@ function GeneratedTrainingPanel({
           </button>
         </div>
       </div>
+      <div className="runStatusStrip">
+        <span>
+          Status <strong>{displayedMetrics?.status ?? "idle"}</strong>
+        </span>
+        <span>
+          Current topology <strong>{currentTopologyId}</strong>
+        </span>
+        <span>
+          Run <strong>{activeRunId ?? displayedMetrics?.run_id ?? "-"}</strong>
+        </span>
+        <span className={topologyMatches === false ? "mismatch" : "match"}>
+          Match <strong>{topologyMatches === undefined ? "-" : topologyMatches ? "yes" : "no"}</strong>
+        </span>
+      </div>
+      {trainingBusy || displayedMetrics?.status === "running" ? (
+        <div className="trainingProgress" aria-label="Training progress">
+          <span style={{ width: `${progress}%` }} />
+        </div>
+      ) : null}
       <div className="trainingControls">
         <label>
           <span>Epochs</span>
@@ -788,30 +929,77 @@ function GeneratedTrainingPanel({
         </label>
       </div>
       <p className="trainingNote">Default settings are tuned for a quick real-MNIST compiler check.</p>
-      {metrics ? (
+      {displayedMetrics ? (
         <div className="trainingMetricGrid">
           <span>
-            Accuracy <strong>{formatPercent(metrics.test_accuracy)}</strong>
+            Accuracy <strong>{formatMaybePercent(displayedMetrics.test_accuracy)}</strong>
           </span>
           <span>
-            Train loss <strong>{metrics.train_loss.toFixed(3)}</strong>
+            Train loss <strong>{formatMaybeNumber(displayedMetrics.train_loss)}</strong>
           </span>
           <span>
-            Test loss <strong>{metrics.test_loss.toFixed(3)}</strong>
+            Test loss <strong>{formatMaybeNumber(displayedMetrics.test_loss)}</strong>
           </span>
           <span>
-            Final batch <strong>{metrics.final_batch_loss.toFixed(3)}</strong>
+            Final batch <strong>{formatMaybeNumber(displayedMetrics.final_batch_loss)}</strong>
           </span>
           <span>
-            Samples <strong>{metrics.train_limit.toLocaleString()} / {metrics.test_limit.toLocaleString()}</strong>
+            Samples <strong>{displayedMetrics.train_limit.toLocaleString()} / {displayedMetrics.test_limit.toLocaleString()}</strong>
           </span>
           <span>
-            Checkpoint <strong>{metrics.checkpoint}</strong>
+            Checkpoint <strong>{displayedMetrics.checkpoint ?? "-"}</strong>
           </span>
         </div>
       ) : (
         <div className="emptyTraining">No generated training metrics yet.</div>
       )}
+      <div className="trainingRuntimeGrid">
+        <div className="trainingLogPanel">
+          <div className="subPanelHeader">
+            <strong>Live log</strong>
+            <ScrollText size={16} />
+          </div>
+          <pre className="trainingLog">{logs.length > 0 ? logs.join("\n") : "No live log yet."}</pre>
+        </div>
+        <div className="runHistoryPanel">
+          <div className="subPanelHeader">
+            <strong>Run history</strong>
+            <span>{runsBusy ? "Refreshing" : `${runHistory.length} saved`}</span>
+          </div>
+          <div className="runHistoryTable">
+            <div className="tableHead">Run</div>
+            <div className="tableHead">Topology</div>
+            <div className="tableHead">Accuracy</div>
+            <div className="tableHead">Status</div>
+            {runHistory.length === 0 ? (
+              <button className="runHistoryEmpty" type="button" onClick={() => onSelectRun(null)}>
+                No saved runs yet.
+              </button>
+            ) : (
+              runHistory.slice(0, 8).map((run) => (
+                <Fragment key={run.runId}>
+                  <button className={`runHistoryCell ${run.runId === selectedRunId ? "selected" : ""}`} type="button" onClick={() => onSelectRun(run.runId)}>
+                    {formatRunLabel(run.runId)}
+                  </button>
+                  <button
+                    className={`runHistoryCell topology ${run.topologyId === currentTopologyId ? "match" : "mismatch"} ${run.runId === selectedRunId ? "selected" : ""}`}
+                    type="button"
+                    onClick={() => onSelectRun(run.runId)}
+                  >
+                    {run.topologyId ?? "-"}
+                  </button>
+                  <button className={`runHistoryCell ${run.runId === selectedRunId ? "selected" : ""}`} type="button" onClick={() => onSelectRun(run.runId)}>
+                    {formatMaybePercent(run.metrics.test_accuracy)}
+                  </button>
+                  <button className={`runHistoryCell ${run.runId === selectedRunId ? "selected" : ""}`} type="button" onClick={() => onSelectRun(run.runId)}>
+                    {run.status}
+                  </button>
+                </Fragment>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
     </section>
   );
 }
@@ -875,6 +1063,22 @@ function validationHint(error: string) {
 
 function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatMaybePercent(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? formatPercent(value) : "-";
+}
+
+function formatMaybeNumber(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "-";
+}
+
+function formatRunLabel(runId: string) {
+  const [timestamp] = runId.split("_");
+  if (!timestamp || timestamp.length < 15) {
+    return runId;
+  }
+  return `${timestamp.slice(4, 6)}/${timestamp.slice(6, 8)} ${timestamp.slice(9, 11)}:${timestamp.slice(11, 13)}`;
 }
 
 function createNode(kind: Extract<NodeKind, "multi_branch_residual" | "auxiliary_classifier" | "feature_head">, id: string, position: TopologyNode["position"]): TopologyNode {

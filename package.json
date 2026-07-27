@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "generate": "tsx scripts/generate.ts",
+    "verify:generated": "npm run generate && python generated/smoke_test.py"
   },
   "dependencies": {
     "lucide-react": "^1.23.0",
@@ -22,6 +24,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "tsx": "^4.23.1",
     "typescript": "^5.6.0"
   }
 }

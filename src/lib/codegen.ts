@@ -1,4 +1,4 @@
-import { formatCompactNumber, formatShape, resolveTopology, type TensorShape, type TopologyNode, type TopologyProject } from "@/lib/topology";
+import { formatCompactNumber, formatShape, resolveTopology, type TensorShape, type TopologyNode, type TopologyProject } from "./topology";
 
 export type GeneratedFile = {
   path: string;
@@ -140,9 +140,9 @@ from torch import nn
 
 
 class ConvBnGelu(nn.Sequential):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1):
         super().__init__(
-            nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, bias=False),
+            nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.GELU(),
         )
@@ -187,7 +187,7 @@ class MultiBranchResidual(nn.Module):
         self.branches = nn.ModuleList([
             ConvBnGelu(in_channels, branch_channels, 3, stride, 1),
             ConvBnGelu(in_channels, branch_channels, 5, stride, 2),
-            ConvBnGelu(in_channels, branch_channels, 3, stride, 2),
+            ConvBnGelu(in_channels, branch_channels, 3, stride, 2, dilation=2),
             nn.Sequential(
                 nn.Conv2d(in_channels, in_channels, 3, stride=stride, padding=1, groups=in_channels, bias=False),
                 nn.Conv2d(in_channels, branch_channels, 1, bias=False),

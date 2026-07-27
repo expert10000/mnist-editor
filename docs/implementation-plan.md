@@ -60,7 +60,9 @@ Current status:
 - Stable `architecture.json` IR is generated from the editable graph.
 - `blocks.py`, `model.py`, `smoke_test.py`, `architecture.md`, and `experiment_manifest.yaml` previews are generated in the UI.
 - A downloadable JSON bundle contains all generated files.
-- Runtime execution of the generated PyTorch smoke test remains open.
+- `npm run generate` writes generated files to `generated/`.
+- `npm run verify:generated` regenerates files and runs the emitted PyTorch smoke test.
+- The default generated PyTorch model imports and passes forward/backward smoke verification.
 
 ## Phase 4: Experiment Factory
 

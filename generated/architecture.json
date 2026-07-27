@@ -1,0 +1,269 @@
+{
+  "network": {
+    "name": "enhanced_five_block_mnist_v1",
+    "version": "0.1.0",
+    "inputShape": [
+      "B",
+      1,
+      28,
+      28
+    ],
+    "mainPath": [
+      {
+        "id": "input",
+        "name": "MNIST image",
+        "operator": "input",
+        "inputShape": [
+          "B",
+          1,
+          28,
+          28
+        ],
+        "outputShape": [
+          "B",
+          1,
+          28,
+          28
+        ],
+        "parameters": {
+          "channels": 1,
+          "height": 28,
+          "width": 28
+        }
+      },
+      {
+        "id": "stem",
+        "name": "Stem",
+        "operator": "conv_bn_gelu",
+        "inputShape": [
+          "B",
+          1,
+          28,
+          28
+        ],
+        "outputShape": [
+          "B",
+          32,
+          28,
+          28
+        ],
+        "parameters": {
+          "out_channels": 32,
+          "kernel_size": 3,
+          "stride": 1,
+          "padding": 1
+        }
+      },
+      {
+        "id": "block1",
+        "name": "Block 1",
+        "operator": "multi_branch_residual",
+        "inputShape": [
+          "B",
+          32,
+          28,
+          28
+        ],
+        "outputShape": [
+          "B",
+          48,
+          28,
+          28
+        ],
+        "parameters": {
+          "out_channels": 48,
+          "stride": 1,
+          "branch_count": 4,
+          "use_se": false,
+          "se_reduction": 8,
+          "drop_path": 0
+        }
+      },
+      {
+        "id": "block2",
+        "name": "Block 2",
+        "operator": "multi_branch_residual",
+        "inputShape": [
+          "B",
+          48,
+          28,
+          28
+        ],
+        "outputShape": [
+          "B",
+          80,
+          14,
+          14
+        ],
+        "parameters": {
+          "out_channels": 80,
+          "stride": 2,
+          "branch_count": 4,
+          "use_se": false,
+          "se_reduction": 8,
+          "drop_path": 0.01
+        }
+      },
+      {
+        "id": "block3",
+        "name": "Block 3",
+        "operator": "multi_branch_residual",
+        "inputShape": [
+          "B",
+          80,
+          14,
+          14
+        ],
+        "outputShape": [
+          "B",
+          96,
+          14,
+          14
+        ],
+        "parameters": {
+          "out_channels": 96,
+          "stride": 1,
+          "branch_count": 4,
+          "use_se": true,
+          "se_reduction": 8,
+          "drop_path": 0.02
+        }
+      },
+      {
+        "id": "block4",
+        "name": "Block 4",
+        "operator": "multi_branch_residual",
+        "inputShape": [
+          "B",
+          96,
+          14,
+          14
+        ],
+        "outputShape": [
+          "B",
+          144,
+          7,
+          7
+        ],
+        "parameters": {
+          "out_channels": 144,
+          "stride": 2,
+          "branch_count": 4,
+          "use_se": true,
+          "se_reduction": 8,
+          "drop_path": 0.03
+        }
+      },
+      {
+        "id": "block5",
+        "name": "Block 5",
+        "operator": "multi_branch_residual",
+        "inputShape": [
+          "B",
+          144,
+          7,
+          7
+        ],
+        "outputShape": [
+          "B",
+          160,
+          7,
+          7
+        ],
+        "parameters": {
+          "out_channels": 160,
+          "stride": 1,
+          "branch_count": 4,
+          "use_se": true,
+          "se_reduction": 8,
+          "drop_path": 0.05
+        }
+      },
+      {
+        "id": "pooling",
+        "name": "GAP + GMP",
+        "operator": "pooling_fusion",
+        "inputShape": [
+          "B",
+          160,
+          7,
+          7
+        ],
+        "outputShape": [
+          "B",
+          320
+        ],
+        "parameters": {
+          "mode": "gap_gmp"
+        }
+      },
+      {
+        "id": "feature_head",
+        "name": "Feature head",
+        "operator": "feature_head",
+        "inputShape": [
+          "B",
+          320
+        ],
+        "outputShape": [
+          "B",
+          128
+        ],
+        "parameters": {
+          "hidden_features": 192,
+          "embedding_features": 128,
+          "dropout": 0.2
+        }
+      },
+      {
+        "id": "classifier",
+        "name": "Classifier",
+        "operator": "classifier",
+        "inputShape": [
+          "B",
+          128
+        ],
+        "outputShape": [
+          "B",
+          10
+        ],
+        "parameters": {
+          "classes": 10
+        }
+      }
+    ],
+    "auxiliaryHeads": [
+      {
+        "id": "auxiliary_head",
+        "name": "Auxiliary head",
+        "operator": "auxiliary_classifier",
+        "source": "block3",
+        "inputShape": [
+          "B",
+          96,
+          14,
+          14
+        ],
+        "outputShape": [
+          "B",
+          10
+        ],
+        "parameters": {
+          "classes": 10
+        }
+      }
+    ],
+    "totals": {
+      "parameters": 1350532,
+      "flops": 260223712,
+      "branchCount": 20,
+      "residualPaths": 5,
+      "auxiliaryHeads": 1,
+      "embeddingDimension": 128
+    },
+    "validation": {
+      "errors": [],
+      "warnings": []
+    }
+  }
+}

@@ -19,6 +19,13 @@ npm run dev
 
 Then open the local URL printed by Next.js.
 
+Generate and verify the default topology:
+
+```powershell
+npm run generate
+npm run verify:generated
+```
+
 ## Current Scope
 
 This repository starts with the Phase 1 dashboard prototype:
@@ -37,5 +44,7 @@ This repository starts with the Phase 1 dashboard prototype:
 - repair cue for invalid branch channel splits;
 - generated previews for `architecture.json`, `blocks.py`, `model.py`, `smoke_test.py`, `architecture.md`, and `experiment_manifest.yaml`;
 - generated file bundle download.
+- generated output files in `generated/`;
+- runtime verification for generated PyTorch with `npm run verify:generated`.
 
 Next phases will add save/load, undo/redo, generated PyTorch, smoke tests, ablations, and OOF-aware experiment generation.

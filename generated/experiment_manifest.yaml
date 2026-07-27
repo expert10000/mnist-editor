@@ -1,0 +1,17 @@
+experiment_group: fiveblock_pooling_width_search
+base_network: enhanced_five_block_mnist_v1
+expected_runs: 36
+sweep:
+  block5.out_channels:
+    - 144
+    - 160
+    - 176
+    - 192
+  pooling.type:
+    - gap
+    - gap_gmp
+    - gem
+seeds:
+  - 1
+  - 2
+  - 3

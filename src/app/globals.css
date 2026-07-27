@@ -159,6 +159,75 @@ h1 {
   background: #fff6f6;
 }
 
+.trainingPanel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.trainingPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trainingPanelHeader h2 {
+  font-size: 1.18rem;
+}
+
+.trainingPanelHeader button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: #fbfcfd;
+  color: var(--blue);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.trainingPanelHeader button:disabled {
+  color: #9aa6b5;
+  cursor: wait;
+}
+
+.trainingMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trainingMetricGrid span,
+.emptyTraining {
+  min-height: 52px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.trainingMetricGrid strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.92rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr) 290px;
@@ -711,6 +780,7 @@ h1 {
 
 @media (max-width: 980px) {
   .summaryGrid,
+  .trainingMetricGrid,
   .workspace {
     grid-template-columns: 1fr;
   }

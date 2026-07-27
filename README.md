@@ -24,6 +24,7 @@ Generate and verify the default topology:
 ```powershell
 npm run generate
 npm run verify:generated
+npm run train:generated
 ```
 
 ## Current Scope
@@ -46,5 +47,8 @@ This repository starts with the Phase 1 dashboard prototype:
 - generated file bundle download.
 - generated output files in `generated/`;
 - runtime verification for generated PyTorch with `npm run verify:generated`.
+- small real-MNIST training check with `npm run train:generated`;
+- generated training metrics surfaced in the UI from `generated/train_metrics.json`;
+- generated checkpoints saved locally under `generated/`.
 
 Next phases will add save/load, undo/redo, generated PyTorch, smoke tests, ablations, and OOF-aware experiment generation.

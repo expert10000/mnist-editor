@@ -17,7 +17,7 @@ import {
   Upload,
   XCircle,
 } from "lucide-react";
-import { Fragment, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 
 import { generateFiles, type GeneratedFile } from "@/lib/codegen";
 import {
@@ -35,6 +35,20 @@ import {
 type BottomPanel = "trace" | "validation" | "generated";
 type EditorHistory = { past: TopologyProject[]; present: TopologyProject; future: TopologyProject[] };
 type Notice = { tone: "good" | "bad"; text: string } | null;
+type GeneratedTrainMetrics = {
+  status: string;
+  epochs: number;
+  train_limit: number;
+  test_limit: number;
+  first_batch_loss: number;
+  final_batch_loss: number;
+  train_loss: number;
+  test_loss: number;
+  test_accuracy: number;
+  checkpoint: string;
+  duration_seconds: number;
+  passed_smoke_rule: boolean;
+} | null;
 type DragState = {
   nodeId: string;
   startClientX: number;
@@ -51,6 +65,8 @@ export default function Home() {
   const [bottomPanel, setBottomPanel] = useState<BottomPanel>("trace");
   const [selectedGeneratedPath, setSelectedGeneratedPath] = useState("model.py");
   const [notice, setNotice] = useState<Notice>(null);
+  const [trainMetrics, setTrainMetrics] = useState<GeneratedTrainMetrics>(null);
+  const [metricsBusy, setMetricsBusy] = useState(false);
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -65,6 +81,21 @@ export default function Home() {
   const selectedGeneratedFile = generatedFiles.find((file) => file.path === selectedGeneratedPath) ?? generatedFiles[0];
   const branchRepair = getBranchRepair(selectedNode);
   const boardSize = useMemo(() => getBoardSize(project.nodes), [project.nodes]);
+
+  async function loadGeneratedMetrics() {
+    setMetricsBusy(true);
+    try {
+      const response = await fetch("/api/generated-metrics", { cache: "no-store" });
+      const payload = await response.json();
+      setTrainMetrics(payload.metrics ?? null);
+    } finally {
+      setMetricsBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadGeneratedMetrics();
+  }, []);
 
   function updateNodeParameter(nodeId: string, key: string, value: boolean | number | string) {
     commitProject((current) => ({
@@ -399,6 +430,8 @@ export default function Home() {
         />
       </section>
 
+      <GeneratedTrainingPanel metrics={trainMetrics} busy={metricsBusy} onRefresh={loadGeneratedMetrics} />
+
       <section className="workspace">
         <aside className="libraryPanel" aria-label="Node library">
           <div className="panelHeader">
@@ -624,6 +657,55 @@ export default function Home() {
   );
 }
 
+function GeneratedTrainingPanel({
+  metrics,
+  busy,
+  onRefresh,
+}: {
+  metrics: GeneratedTrainMetrics;
+  busy: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <section className="trainingPanel">
+      <div className="trainingPanelHeader">
+        <div>
+          <p className="eyebrow">Generated runtime</p>
+          <h2>MNIST training check</h2>
+        </div>
+        <button type="button" onClick={onRefresh} disabled={busy}>
+          <RefreshCw size={16} />
+          Refresh
+        </button>
+      </div>
+      {metrics ? (
+        <div className="trainingMetricGrid">
+          <span>
+            Accuracy <strong>{formatPercent(metrics.test_accuracy)}</strong>
+          </span>
+          <span>
+            Train loss <strong>{metrics.train_loss.toFixed(3)}</strong>
+          </span>
+          <span>
+            Test loss <strong>{metrics.test_loss.toFixed(3)}</strong>
+          </span>
+          <span>
+            Final batch <strong>{metrics.final_batch_loss.toFixed(3)}</strong>
+          </span>
+          <span>
+            Samples <strong>{metrics.train_limit.toLocaleString()} / {metrics.test_limit.toLocaleString()}</strong>
+          </span>
+          <span>
+            Checkpoint <strong>{metrics.checkpoint}</strong>
+          </span>
+        </div>
+      ) : (
+        <div className="emptyTraining">No generated training metrics yet.</div>
+      )}
+    </section>
+  );
+}
+
 function GeneratedFilesPanel({
   files,
   selectedPath,
@@ -679,6 +761,10 @@ function validationHint(error: string) {
     return "Reduce stride or insert fewer downsampling operations.";
   }
   return "Edit the selected node parameters, then recheck this panel.";
+}
+
+function formatPercent(value: number) {
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 function createNode(kind: Extract<NodeKind, "multi_branch_residual" | "auxiliary_classifier" | "feature_head">, id: string, position: TopologyNode["position"]): TopologyNode {

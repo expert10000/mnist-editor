@@ -90,3 +90,20 @@ Deliverables:
 Completion criteria:
 
 - Architectures can be ranked by validation accuracy, calibration, unique corrections, and OOF ensemble contribution.
+
+## Phase 4.5: Generated Model Training Check
+
+Deliverables:
+
+- generated-model MNIST training script;
+- `npm run train:generated`;
+- metrics JSON export;
+- local checkpoint export;
+- generated-run metrics visible in the editor UI.
+
+Current status:
+
+- `scripts/train_generated.py` trains `generated/model.py` on a small real MNIST subset.
+- `npm run train:generated` regenerates files, trains one CPU epoch on 1,024 train samples, evaluates 512 test samples, saves `generated/train_metrics.json`, and writes a local checkpoint.
+- The UI reads the latest metrics through `/api/generated-metrics`.
+- Latest smoke run passed: loss decreased from 2.546 to 2.140 and tiny-subset test accuracy reached 14.3%.

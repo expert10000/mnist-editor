@@ -5,3 +5,5 @@ dist
 *.log
 .env*
 __pycache__
+data/
+generated/*.pt

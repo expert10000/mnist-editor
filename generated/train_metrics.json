@@ -1,0 +1,15 @@
+{
+  "status": "complete",
+  "epochs": 1,
+  "train_limit": 1024,
+  "test_limit": 512,
+  "seed": 7,
+  "first_batch_loss": 2.546267032623291,
+  "final_batch_loss": 2.1399035453796387,
+  "train_loss": 2.398191422224045,
+  "test_loss": 2.8932653665542603,
+  "test_accuracy": 0.142578125,
+  "checkpoint": "generated\\generated_mnist.pt",
+  "duration_seconds": 14.15,
+  "passed_smoke_rule": true
+}

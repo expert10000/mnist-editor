@@ -57,6 +57,16 @@ export type TopologyResolution = {
   embeddingDimension?: number;
 };
 
+const nodeKinds = new Set<NodeKind>([
+  "input",
+  "conv_bn_gelu",
+  "multi_branch_residual",
+  "auxiliary_classifier",
+  "pooling_fusion",
+  "feature_head",
+  "classifier",
+]);
+
 export const enhancedFiveBlockTopology: TopologyProject = {
   name: "Enhanced Five-Block MNIST V1",
   version: "0.1.0",
@@ -207,6 +217,130 @@ export function resolveTopology(project: TopologyProject): TopologyResolution {
     residualPaths: residuals.length,
     auxiliaryHeads: project.nodes.filter((node) => node.kind === "auxiliary_classifier").length,
     embeddingDimension: featureHead?.outputShape?.[1],
+  };
+}
+
+export function parseTopologyProject(value: unknown): { project?: TopologyProject; errors: string[] } {
+  const errors: string[] = [];
+  if (!isRecord(value)) {
+    return { errors: ["Project JSON must be an object."] };
+  }
+
+  const name = typeof value.name === "string" ? value.name : "";
+  const version = typeof value.version === "string" ? value.version : "";
+  const inputShape = isTensorShape(value.inputShape) ? value.inputShape : undefined;
+
+  if (name.trim().length === 0) {
+    errors.push("Project name is required.");
+  }
+  if (version.trim().length === 0) {
+    errors.push("Project version is required.");
+  }
+  if (!inputShape) {
+    errors.push("Input shape must be [\"B\", C, H, W] or [\"B\", F].");
+  }
+  if (!Array.isArray(value.nodes) || value.nodes.length === 0) {
+    errors.push("Project must contain at least one node.");
+  }
+  if (!Array.isArray(value.edges)) {
+    errors.push("Project edges must be an array.");
+  }
+
+  const nodes: TopologyNode[] = [];
+  const nodeIds = new Set<string>();
+  if (Array.isArray(value.nodes)) {
+    value.nodes.forEach((nodeValue, index) => {
+      if (!isRecord(nodeValue)) {
+        errors.push(`Node ${index + 1} must be an object.`);
+        return;
+      }
+      const id = typeof nodeValue.id === "string" ? nodeValue.id : "";
+      const kind = typeof nodeValue.kind === "string" && nodeKinds.has(nodeValue.kind as NodeKind) ? (nodeValue.kind as NodeKind) : undefined;
+      const parameters = isRecord(nodeValue.parameters) ? toParameterRecord(nodeValue.parameters) : undefined;
+      const position = isRecord(nodeValue.position) ? nodeValue.position : undefined;
+      const x = typeof position?.x === "number" && Number.isFinite(position.x) ? position.x : undefined;
+      const y = typeof position?.y === "number" && Number.isFinite(position.y) ? position.y : undefined;
+
+      if (!id) {
+        errors.push(`Node ${index + 1} is missing an id.`);
+      }
+      if (id && nodeIds.has(id)) {
+        errors.push(`Duplicate node id: ${id}.`);
+      }
+      if (!kind) {
+        errors.push(`Node ${id || index + 1} has an unsupported kind.`);
+      }
+      if (!parameters) {
+        errors.push(`Node ${id || index + 1} parameters must be an object.`);
+      }
+      if (x === undefined || y === undefined) {
+        errors.push(`Node ${id || index + 1} position must contain numeric x and y values.`);
+      }
+
+      if (id && kind && parameters && x !== undefined && y !== undefined) {
+        nodeIds.add(id);
+        nodes.push({
+          id,
+          kind,
+          name: typeof nodeValue.name === "string" && nodeValue.name.trim() ? nodeValue.name : id,
+          description: typeof nodeValue.description === "string" ? nodeValue.description : "",
+          position: { x, y },
+          parameters,
+        });
+      }
+    });
+  }
+
+  const edges: TopologyEdge[] = [];
+  if (Array.isArray(value.edges)) {
+    value.edges.forEach((edgeValue, index) => {
+      if (!isRecord(edgeValue)) {
+        errors.push(`Edge ${index + 1} must be an object.`);
+        return;
+      }
+      const id = typeof edgeValue.id === "string" ? edgeValue.id : "";
+      const source = typeof edgeValue.source === "string" ? edgeValue.source : "";
+      const target = typeof edgeValue.target === "string" ? edgeValue.target : "";
+      if (!id || !source || !target) {
+        errors.push(`Edge ${index + 1} must include id, source, and target.`);
+      }
+      if (source && !nodeIds.has(source)) {
+        errors.push(`Edge ${id || index + 1} source does not exist: ${source}.`);
+      }
+      if (target && !nodeIds.has(target)) {
+        errors.push(`Edge ${id || index + 1} target does not exist: ${target}.`);
+      }
+      if (id && source && target && nodeIds.has(source) && nodeIds.has(target)) {
+        edges.push({
+          id,
+          source,
+          target,
+          branch: typeof edgeValue.branch === "string" ? edgeValue.branch : undefined,
+        });
+      }
+    });
+  }
+
+  if (!nodeIds.has("input")) {
+    errors.push("Project must include an input node.");
+  }
+  if (!nodeIds.has("classifier")) {
+    errors.push("Project must include a classifier node.");
+  }
+
+  if (errors.length > 0 || !inputShape) {
+    return { errors };
+  }
+
+  return {
+    project: {
+      name,
+      version,
+      inputShape,
+      nodes,
+      edges,
+    },
+    errors,
   };
 }
 
@@ -382,6 +516,29 @@ function convFlops(inChannels: number, outChannels: number, height: number, widt
 
 function asNumber(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTensorShape(value: unknown): value is TensorShape {
+  if (!Array.isArray(value) || value[0] !== "B") {
+    return false;
+  }
+  if (value.length !== 2 && value.length !== 4) {
+    return false;
+  }
+  return value.slice(1).every((item) => typeof item === "number" && Number.isFinite(item) && item > 0);
+}
+
+function toParameterRecord(value: Record<string, unknown>): Record<string, boolean | number | string> {
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, boolean | number | string] => {
+      const candidate = entry[1];
+      return typeof candidate === "boolean" || typeof candidate === "number" || typeof candidate === "string";
+    }),
+  );
 }
 
 export function formatShape(shape?: TensorShape) {

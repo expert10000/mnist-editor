@@ -23,14 +23,20 @@ Completion criteria:
 
 Deliverables:
 
-- project JSON save/load;
-- undo and redo;
+- project JSON export/import;
+- undo and redo for parameter edits;
 - named snapshots;
 - deterministic topology version IDs.
 
 Completion criteria:
 
 - A topology can be edited, saved, reloaded, and restored without losing computed state.
+
+Current status:
+
+- Basic JSON export/import is implemented.
+- Undo/redo is implemented for project edits.
+- Named snapshots and deterministic topology version IDs remain open.
 
 ## Phase 3: Compiler
 

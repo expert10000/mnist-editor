@@ -27,8 +27,11 @@ This repository starts with the Phase 1 dashboard prototype:
 - template browser;
 - node inspector;
 - editable block and head parameters;
+- undo and redo for parameter edits;
+- project JSON import and export;
 - live shape trace;
 - validation panel;
+- repair cue for invalid branch channel splits;
 - IR preview;
 - experiment sweep preview.
 

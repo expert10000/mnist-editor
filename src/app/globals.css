@@ -44,6 +44,12 @@ select {
   margin-bottom: 16px;
 }
 
+.topbarActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: var(--teal);
@@ -75,6 +81,42 @@ h1 {
   color: var(--blue);
   cursor: pointer;
   box-shadow: var(--shadow);
+}
+
+.iconButton:disabled {
+  color: #a5afbc;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.hiddenInput {
+  display: none;
+}
+
+.notice {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  margin: -4px 0 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.notice.good {
+  border-color: rgba(23, 114, 69, 0.34);
+  background: #f4faf6;
+  color: var(--green);
+}
+
+.notice.bad {
+  border-color: rgba(184, 50, 58, 0.34);
+  background: #fff6f6;
+  color: var(--red);
 }
 
 .summaryGrid {
@@ -383,6 +425,17 @@ h1 {
   justify-self: end;
 }
 
+.repairButton {
+  min-height: 40px;
+  border: 1px solid rgba(168, 100, 19, 0.32);
+  border-radius: 7px;
+  padding: 0 11px;
+  background: #fff8e8;
+  color: #6f4c0d;
+  cursor: pointer;
+  font-weight: 900;
+}
+
 .bottomPanel {
   display: grid;
   gap: 12px;
@@ -482,6 +535,17 @@ h1 {
   border-color: rgba(184, 50, 58, 0.34);
   background: #fff6f6;
   color: var(--red);
+}
+
+.validationItem span {
+  display: grid;
+  gap: 3px;
+}
+
+.validationItem small {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
 }
 
 .codePreview {

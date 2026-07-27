@@ -227,16 +227,40 @@ h1 {
   gap: 7px;
 }
 
+.nodePalette button,
 .nodePalette span {
   min-height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #f4f6f8;
   color: var(--muted);
   font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.nodePalette button {
+  cursor: pointer;
+}
+
+.nodePalette button:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.linkNotice {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 7px 9px;
+  border: 1px solid rgba(36, 87, 166, 0.26);
+  border-radius: 7px;
+  background: #edf4ff;
+  color: var(--blue);
+  font-size: 0.82rem;
   font-weight: 900;
 }
 
@@ -281,6 +305,11 @@ h1 {
   stroke-linejoin: round;
 }
 
+.topologyEdges .auxiliaryEdge {
+  stroke: var(--amber);
+  stroke-dasharray: 7 7;
+}
+
 .topologyNode {
   position: absolute;
   width: 158px;
@@ -293,9 +322,14 @@ h1 {
   border-radius: 8px;
   background: #ffffff;
   color: var(--ink);
-  cursor: pointer;
+  cursor: grab;
   text-align: left;
+  touch-action: none;
   box-shadow: 0 8px 18px rgba(30, 42, 56, 0.08);
+}
+
+.topologyNode:active {
+  cursor: grabbing;
 }
 
 .topologyNode.selected {
@@ -434,6 +468,74 @@ h1 {
   color: #6f4c0d;
   cursor: pointer;
   font-weight: 900;
+}
+
+.edgeEditor {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.edgeEditorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.edgeEditorHeader strong {
+  font-size: 0.9rem;
+}
+
+.edgeEditorHeader button,
+.edgeRow button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: #fbfcfd;
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.edgeRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.edgeRow span {
+  display: grid;
+  gap: 2px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.edgeRow small {
+  color: var(--amber);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.emptyEdge {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .bottomPanel {

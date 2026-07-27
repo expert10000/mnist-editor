@@ -27,6 +27,9 @@ This repository starts with the Phase 1 dashboard prototype:
 - template browser;
 - node inspector;
 - editable block and head parameters;
+- draggable node layout;
+- add/delete for residual blocks and heads;
+- connect/disconnect graph edges;
 - undo and redo for parameter edits;
 - project JSON import and export;
 - live shape trace;

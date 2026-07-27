@@ -49,6 +49,8 @@ export type TopologyResolution = {
   trace: TraceEntry[];
   errors: string[];
   warnings: string[];
+  mainPath: string[];
+  disconnectedNodeIds: string[];
   totalParameters: number;
   totalFlops: number;
   branchCount: number;
@@ -175,12 +177,14 @@ export const enhancedFiveBlockTopology: TopologyProject = {
   ],
 };
 
-const mainPath = ["input", "stem", "block1", "block2", "block3", "block4", "block5", "pooling", "feature_head", "classifier"];
-
 export function resolveTopology(project: TopologyProject): TopologyResolution {
   const nodeById = new Map(project.nodes.map((node) => [node.id, node]));
   const trace: TraceEntry[] = [];
   const shapeByNode = new Map<string, TensorShape>();
+  const structuralErrors: string[] = [];
+  const structuralWarnings: string[] = [];
+  const mainPath = findMainPath(project, structuralErrors, structuralWarnings);
+  const reachableNodeIds = new Set(mainPath);
   let currentShape: TensorShape | undefined = project.inputShape;
 
   for (const nodeId of mainPath) {
@@ -196,21 +200,47 @@ export function resolveTopology(project: TopologyProject): TopologyResolution {
     }
   }
 
-  const auxiliaryHead = nodeById.get("auxiliary_head");
-  const block3Shape = shapeByNode.get("block3");
-  if (auxiliaryHead) {
-    trace.splice(5, 0, resolveNode(auxiliaryHead, block3Shape));
+  const auxiliaryEdges = project.edges.filter((edge) => {
+    const target = nodeById.get(edge.target);
+    return edge.branch === "auxiliary" || target?.kind === "auxiliary_classifier";
+  });
+  for (const edge of auxiliaryEdges) {
+    const auxiliaryNode = nodeById.get(edge.target);
+    if (!auxiliaryNode) {
+      continue;
+    }
+    const sourceShape = shapeByNode.get(edge.source);
+    reachableNodeIds.add(auxiliaryNode.id);
+    const auxiliaryEntry = resolveNode(auxiliaryNode, sourceShape);
+    const sourceIndex = trace.findIndex((entry) => entry.nodeId === edge.source);
+    trace.splice(sourceIndex >= 0 ? sourceIndex + 1 : trace.length, 0, auxiliaryEntry);
   }
 
-  const errors = trace.flatMap((entry) => entry.errors.map((error) => `${entry.name}: ${error}`));
-  const warnings = trace.flatMap((entry) => entry.warnings.map((warning) => `${entry.name}: ${warning}`));
+  for (const node of project.nodes) {
+    if (reachableNodeIds.has(node.id)) {
+      continue;
+    }
+    trace.push(traceEntry(node, undefined, undefined, 0, 0, ["node is disconnected from the input path"], []));
+  }
+
+  const errors = [
+    ...structuralErrors,
+    ...trace.flatMap((entry) => entry.errors.map((error) => `${entry.name}: ${error}`)),
+  ];
+  const warnings = [
+    ...structuralWarnings,
+    ...trace.flatMap((entry) => entry.warnings.map((warning) => `${entry.name}: ${warning}`)),
+  ];
   const featureHead = trace.find((entry) => entry.nodeId === "feature_head");
   const residuals = project.nodes.filter((node) => node.kind === "multi_branch_residual");
+  const disconnectedNodeIds = project.nodes.filter((node) => !reachableNodeIds.has(node.id)).map((node) => node.id);
 
   return {
     trace,
     errors,
     warnings,
+    mainPath,
+    disconnectedNodeIds,
     totalParameters: trace.reduce((sum, entry) => sum + entry.parameters, 0),
     totalFlops: trace.reduce((sum, entry) => sum + entry.flops, 0),
     branchCount: residuals.reduce((sum, node) => sum + asNumber(node.parameters.branch_count, 0), 0),
@@ -218,6 +248,49 @@ export function resolveTopology(project: TopologyProject): TopologyResolution {
     auxiliaryHeads: project.nodes.filter((node) => node.kind === "auxiliary_classifier").length,
     embeddingDimension: featureHead?.outputShape?.[1],
   };
+}
+
+function findMainPath(project: TopologyProject, errors: string[], warnings: string[]) {
+  const nodeById = new Map(project.nodes.map((node) => [node.id, node]));
+  if (!nodeById.has("input")) {
+    errors.push("Project is missing an input node.");
+    return [];
+  }
+  if (!nodeById.has("classifier")) {
+    errors.push("Project is missing a classifier node.");
+  }
+
+  const path: string[] = [];
+  const visited = new Set<string>();
+  let currentId: string | undefined = "input";
+
+  while (currentId) {
+    if (visited.has(currentId)) {
+      errors.push(`Cycle detected at ${nodeById.get(currentId)?.name ?? currentId}.`);
+      break;
+    }
+    visited.add(currentId);
+    path.push(currentId);
+
+    if (currentId === "classifier") {
+      break;
+    }
+
+    const outgoing = project.edges.filter((edge) => {
+      const target = nodeById.get(edge.target);
+      return edge.source === currentId && edge.branch !== "auxiliary" && target?.kind !== "auxiliary_classifier";
+    });
+    if (outgoing.length > 1) {
+      warnings.push(`${nodeById.get(currentId)?.name ?? currentId} has multiple main-path outputs; using ${outgoing[0].target}.`);
+    }
+    currentId = outgoing[0]?.target;
+  }
+
+  if (!path.includes("classifier") && nodeById.has("classifier")) {
+    errors.push("Main path does not reach the classifier.");
+  }
+
+  return path;
 }
 
 export function parseTopologyProject(value: unknown): { project?: TopologyProject; errors: string[] } {

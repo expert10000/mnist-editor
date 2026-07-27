@@ -35,7 +35,11 @@ Completion criteria:
 Current status:
 
 - Basic JSON export/import is implemented.
-- Undo/redo is implemented for project edits.
+- Undo/redo is implemented for parameter, layout, node, and edge edits.
+- Canvas nodes can be dragged and saved through JSON export/import.
+- Residual blocks, auxiliary heads, and feature heads can be added from the library panel.
+- Selected nodes can be deleted, with simple main-path rewiring where possible.
+- Graph edges can be added through link mode and removed from the inspector.
 - Named snapshots and deterministic topology version IDs remain open.
 
 ## Phase 3: Compiler

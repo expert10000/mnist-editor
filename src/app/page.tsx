@@ -6,7 +6,9 @@ import {
   Download,
   FileCode2,
   Link2,
+  LoaderCircle,
   Plus,
+  Play,
   Redo2,
   RefreshCw,
   Table2,
@@ -35,6 +37,13 @@ import {
 type BottomPanel = "trace" | "validation" | "generated";
 type EditorHistory = { past: TopologyProject[]; present: TopologyProject; future: TopologyProject[] };
 type Notice = { tone: "good" | "bad"; text: string } | null;
+type TrainSettings = {
+  epochs: number;
+  trainLimit: number;
+  testLimit: number;
+  batchSize: number;
+  cpu: boolean;
+};
 type GeneratedTrainMetrics = {
   status: string;
   epochs: number;
@@ -67,6 +76,14 @@ export default function Home() {
   const [notice, setNotice] = useState<Notice>(null);
   const [trainMetrics, setTrainMetrics] = useState<GeneratedTrainMetrics>(null);
   const [metricsBusy, setMetricsBusy] = useState(false);
+  const [trainingBusy, setTrainingBusy] = useState(false);
+  const [trainSettings, setTrainSettings] = useState<TrainSettings>({
+    epochs: 1,
+    trainLimit: 1024,
+    testLimit: 512,
+    batchSize: 128,
+    cpu: true,
+  });
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -96,6 +113,29 @@ export default function Home() {
   useEffect(() => {
     void loadGeneratedMetrics();
   }, []);
+
+  async function runGeneratedTraining() {
+    setTrainingBusy(true);
+    setNotice({ tone: "good", text: "Generated training started." });
+    try {
+      const response = await fetch("/api/train-generated", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project, ...trainSettings }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.error ?? `Training failed with status ${response.status}.`);
+      }
+      setTrainMetrics(payload.metrics ?? null);
+      setNotice({ tone: "good", text: "Generated training completed." });
+    } catch (error) {
+      setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Generated training failed." });
+    } finally {
+      setTrainingBusy(false);
+      void loadGeneratedMetrics();
+    }
+  }
 
   function updateNodeParameter(nodeId: string, key: string, value: boolean | number | string) {
     commitProject((current) => ({
@@ -430,7 +470,15 @@ export default function Home() {
         />
       </section>
 
-      <GeneratedTrainingPanel metrics={trainMetrics} busy={metricsBusy} onRefresh={loadGeneratedMetrics} />
+      <GeneratedTrainingPanel
+        metrics={trainMetrics}
+        metricsBusy={metricsBusy}
+        trainingBusy={trainingBusy}
+        settings={trainSettings}
+        onSettingsChange={setTrainSettings}
+        onRefresh={loadGeneratedMetrics}
+        onRun={runGeneratedTraining}
+      />
 
       <section className="workspace">
         <aside className="libraryPanel" aria-label="Node library">
@@ -659,13 +707,25 @@ export default function Home() {
 
 function GeneratedTrainingPanel({
   metrics,
-  busy,
+  metricsBusy,
+  trainingBusy,
+  settings,
+  onSettingsChange,
   onRefresh,
+  onRun,
 }: {
   metrics: GeneratedTrainMetrics;
-  busy: boolean;
+  metricsBusy: boolean;
+  trainingBusy: boolean;
+  settings: TrainSettings;
+  onSettingsChange: (settings: TrainSettings) => void;
   onRefresh: () => void;
+  onRun: () => void;
 }) {
+  function updateSetting<K extends keyof TrainSettings>(key: K, value: TrainSettings[K]) {
+    onSettingsChange({ ...settings, [key]: value });
+  }
+
   return (
     <section className="trainingPanel">
       <div className="trainingPanelHeader">
@@ -673,11 +733,61 @@ function GeneratedTrainingPanel({
           <p className="eyebrow">Generated runtime</p>
           <h2>MNIST training check</h2>
         </div>
-        <button type="button" onClick={onRefresh} disabled={busy}>
-          <RefreshCw size={16} />
-          Refresh
-        </button>
+        <div className="trainingActions">
+          <button type="button" onClick={onRun} disabled={trainingBusy}>
+            {trainingBusy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
+            Run
+          </button>
+          <button type="button" onClick={onRefresh} disabled={metricsBusy || trainingBusy}>
+            <RefreshCw size={16} />
+            Refresh
+          </button>
+        </div>
       </div>
+      <div className="trainingControls">
+        <label>
+          <span>Epochs</span>
+          <input min={1} max={5} type="number" value={settings.epochs} onChange={(event) => updateSetting("epochs", Number(event.target.value))} />
+        </label>
+        <label>
+          <span>Train samples</span>
+          <input
+            min={128}
+            max={10000}
+            step={128}
+            type="number"
+            value={settings.trainLimit}
+            onChange={(event) => updateSetting("trainLimit", Number(event.target.value))}
+          />
+        </label>
+        <label>
+          <span>Test samples</span>
+          <input
+            min={128}
+            max={5000}
+            step={128}
+            type="number"
+            value={settings.testLimit}
+            onChange={(event) => updateSetting("testLimit", Number(event.target.value))}
+          />
+        </label>
+        <label>
+          <span>Batch</span>
+          <input
+            min={16}
+            max={512}
+            step={16}
+            type="number"
+            value={settings.batchSize}
+            onChange={(event) => updateSetting("batchSize", Number(event.target.value))}
+          />
+        </label>
+        <label className="trainingToggle">
+          <span>CPU</span>
+          <input type="checkbox" checked={settings.cpu} onChange={(event) => updateSetting("cpu", event.target.checked)} />
+        </label>
+      </div>
+      <p className="trainingNote">Default settings are tuned for a quick real-MNIST compiler check.</p>
       {metrics ? (
         <div className="trainingMetricGrid">
           <span>

@@ -10,6 +10,6 @@
   "test_loss": 2.8932653665542603,
   "test_accuracy": 0.142578125,
   "checkpoint": "generated\\generated_mnist.pt",
-  "duration_seconds": 14.15,
+  "duration_seconds": 15.1,
   "passed_smoke_rule": true
 }

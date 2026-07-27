@@ -106,4 +106,6 @@ Current status:
 - `scripts/train_generated.py` trains `generated/model.py` on a small real MNIST subset.
 - `npm run train:generated` regenerates files, trains one CPU epoch on 1,024 train samples, evaluates 512 test samples, saves `generated/train_metrics.json`, and writes a local checkpoint.
 - The UI reads the latest metrics through `/api/generated-metrics`.
+- `/api/train-generated` launches training for the current edited topology sent from the UI.
+- The UI exposes configurable epochs, train sample limit, test sample limit, batch size, and CPU/GPU choice.
 - Latest smoke run passed: loss decreased from 2.546 to 2.140 and tiny-subset test accuracy reached 14.3%.

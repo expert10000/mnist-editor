@@ -650,6 +650,51 @@ h1 {
   font-weight: 700;
 }
 
+.generatedPanel {
+  display: grid;
+  gap: 10px;
+}
+
+.generatedHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.generatedTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.generatedTabs button,
+.downloadBundleButton {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: #fbfcfd;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.generatedTabs button.selected {
+  border-color: var(--blue);
+  background: #edf4ff;
+  color: var(--blue);
+}
+
+.downloadBundleButton {
+  background: var(--ink);
+  color: #fff;
+}
+
 .codePreview {
   min-height: 260px;
   max-height: 430px;

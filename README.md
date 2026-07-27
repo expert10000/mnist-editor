@@ -35,7 +35,7 @@ This repository starts with the Phase 1 dashboard prototype:
 - live shape trace;
 - validation panel;
 - repair cue for invalid branch channel splits;
-- IR preview;
-- experiment sweep preview.
+- generated previews for `architecture.json`, `blocks.py`, `model.py`, `smoke_test.py`, `architecture.md`, and `experiment_manifest.yaml`;
+- generated file bundle download.
 
 Next phases will add save/load, undo/redo, generated PyTorch, smoke tests, ablations, and OOF-aware experiment generation.

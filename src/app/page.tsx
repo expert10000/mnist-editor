@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Download,
   FileCode2,
-  FlaskConical,
   Link2,
   Plus,
   Redo2,
@@ -20,6 +19,7 @@ import {
 } from "lucide-react";
 import { Fragment, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 
+import { generateFiles, type GeneratedFile } from "@/lib/codegen";
 import {
   enhancedFiveBlockTopology,
   formatCompactNumber,
@@ -32,7 +32,7 @@ import {
   type TopologyProject,
 } from "@/lib/topology";
 
-type BottomPanel = "trace" | "validation" | "ir" | "experiments";
+type BottomPanel = "trace" | "validation" | "generated";
 type EditorHistory = { past: TopologyProject[]; present: TopologyProject; future: TopologyProject[] };
 type Notice = { tone: "good" | "bad"; text: string } | null;
 type DragState = {
@@ -49,6 +49,7 @@ export default function Home() {
   const [history, setHistory] = useState<EditorHistory>({ past: [], present: enhancedFiveBlockTopology, future: [] });
   const [selectedNodeId, setSelectedNodeId] = useState("block3");
   const [bottomPanel, setBottomPanel] = useState<BottomPanel>("trace");
+  const [selectedGeneratedPath, setSelectedGeneratedPath] = useState("model.py");
   const [notice, setNotice] = useState<Notice>(null);
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -60,8 +61,8 @@ export default function Home() {
   const selectedNode = project.nodes.find((node) => node.id === selectedNodeId) ?? project.nodes[0];
   const selectedTrace = resolution.trace.find((entry) => entry.nodeId === selectedNode.id);
   const selectedEdges = project.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id);
-  const irPreview = useMemo(() => buildIntermediatePreview(project), [project]);
-  const experimentPreview = useMemo(() => buildExperimentPreview(project), [project]);
+  const generatedFiles = useMemo(() => generateFiles(project), [project]);
+  const selectedGeneratedFile = generatedFiles.find((file) => file.path === selectedGeneratedPath) ?? generatedFiles[0];
   const branchRepair = getBranchRepair(selectedNode);
   const boardSize = useMemo(() => getBoardSize(project.nodes), [project.nodes]);
 
@@ -189,6 +190,22 @@ export default function Home() {
     link.click();
     URL.revokeObjectURL(url);
     setNotice({ tone: "good", text: "Project JSON exported." });
+  }
+
+  function downloadGeneratedBundle() {
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      project: project.name,
+      files: Object.fromEntries(generatedFiles.map((file) => [file.path, file.content])),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${project.name.toLowerCase().replaceAll(" ", "-")}-generated-files.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setNotice({ tone: "good", text: "Generated file bundle downloaded." });
   }
 
   async function importProject(file: File | undefined) {
@@ -553,14 +570,7 @@ export default function Home() {
             selected={bottomPanel}
             onSelect={setBottomPanel}
           />
-          <PanelButton icon={<FileCode2 size={17} />} label="IR Preview" value="ir" selected={bottomPanel} onSelect={setBottomPanel} />
-          <PanelButton
-            icon={<FlaskConical size={17} />}
-            label="Experiments"
-            value="experiments"
-            selected={bottomPanel}
-            onSelect={setBottomPanel}
-          />
+          <PanelButton icon={<FileCode2 size={17} />} label="Generated Files" value="generated" selected={bottomPanel} onSelect={setBottomPanel} />
         </div>
 
         {bottomPanel === "trace" ? (
@@ -601,10 +611,48 @@ export default function Home() {
           </div>
         ) : null}
 
-        {bottomPanel === "ir" ? <pre className="codePreview">{irPreview}</pre> : null}
-        {bottomPanel === "experiments" ? <pre className="codePreview">{experimentPreview}</pre> : null}
+        {bottomPanel === "generated" ? (
+          <GeneratedFilesPanel
+            files={generatedFiles}
+            selectedPath={selectedGeneratedFile.path}
+            onSelect={setSelectedGeneratedPath}
+            onDownload={downloadGeneratedBundle}
+          />
+        ) : null}
       </section>
     </main>
+  );
+}
+
+function GeneratedFilesPanel({
+  files,
+  selectedPath,
+  onSelect,
+  onDownload,
+}: {
+  files: GeneratedFile[];
+  selectedPath: string;
+  onSelect: (path: string) => void;
+  onDownload: () => void;
+}) {
+  const selected = files.find((file) => file.path === selectedPath) ?? files[0];
+  return (
+    <div className="generatedPanel">
+      <div className="generatedHeader">
+        <div className="generatedTabs" aria-label="Generated file tabs">
+          {files.map((file) => (
+            <button className={file.path === selected.path ? "selected" : ""} key={file.path} type="button" onClick={() => onSelect(file.path)}>
+              {file.path}
+            </button>
+          ))}
+        </div>
+        <button className="downloadBundleButton" type="button" onClick={onDownload}>
+          <Download size={16} />
+          Bundle
+        </button>
+      </div>
+      <pre className="codePreview">{selected.content}</pre>
+    </div>
   );
 }
 
@@ -732,29 +780,4 @@ function PanelButton({
       {label}
     </button>
   );
-}
-
-function buildIntermediatePreview(project: TopologyProject) {
-  const stages = project.nodes
-    .filter((node) => node.id !== "input")
-    .map((node) => {
-      const parameters = Object.entries(node.parameters)
-        .map(([key, value]) => `      ${key}: ${value}`)
-        .join("\n");
-      return `  - id: ${node.id}\n    operator: ${node.kind}\n${parameters}`;
-    })
-    .join("\n");
-
-  return `network:\n  name: ${project.name.toLowerCase().replaceAll(" ", "_")}\n  version: ${project.version}\n  input_shape: ${formatShape(project.inputShape)}\n  stages:\n${stages}`;
-}
-
-function buildExperimentPreview(project: TopologyProject) {
-  const block5 = project.nodes.find((node) => node.id === "block5");
-  const baseWidth = typeof block5?.parameters.out_channels === "number" ? block5.parameters.out_channels : 160;
-  const widths = [baseWidth - 16, baseWidth, baseWidth + 16, baseWidth + 32].filter((width) => width > 0);
-  const runCount = widths.length * 3 * 3;
-
-  return `experiment_group: fiveblock_pooling_width_search\nbase_network: ${project.name.toLowerCase().replaceAll(" ", "_")}\nexpected_runs: ${runCount}\nsweep:\n  block5.out_channels:\n${widths
-    .map((width) => `    - ${width}`)
-    .join("\n")}\n  pooling.type:\n    - gap\n    - gap_gmp\n    - gem\nseeds:\n  - 1\n  - 2\n  - 3`;
 }

@@ -55,6 +55,13 @@ Completion criteria:
 
 - A valid graph generates runnable PyTorch and passes a forward/backward smoke test.
 
+Current status:
+
+- Stable `architecture.json` IR is generated from the editable graph.
+- `blocks.py`, `model.py`, `smoke_test.py`, `architecture.md`, and `experiment_manifest.yaml` previews are generated in the UI.
+- A downloadable JSON bundle contains all generated files.
+- Runtime execution of the generated PyTorch smoke test remains open.
+
 ## Phase 4: Experiment Factory
 
 Deliverables:

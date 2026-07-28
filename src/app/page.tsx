@@ -25,7 +25,7 @@ import {
   Upload,
   XCircle,
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 
 import { generateFiles, type GeneratedFile } from "@/lib/codegen";
 import {
@@ -83,11 +83,28 @@ type GeneratedTrainMetrics = {
   best_epoch?: number | null;
   accuracy_delta?: number | null;
   epoch_history?: Array<{ epoch: number; train_loss: number; test_loss: number; test_accuracy: number }>;
+  diagnostics_path?: string;
+  diagnostics?: RunDiagnostics | null;
   checkpoint?: string;
   duration_seconds?: number;
   passed_smoke_rule: boolean | null;
   error?: string;
 } | null;
+type RunDiagnostics = {
+  created_at?: string;
+  test_loss?: number;
+  test_samples?: number;
+  confusion_matrix?: number[][];
+  per_class_accuracy?: Array<{ digit: number; accuracy: number | null; correct: number; total: number }>;
+  prediction_samples?: PredictionSample[];
+};
+type PredictionSample = {
+  truth: number;
+  predicted: number;
+  correct: boolean;
+  confidence?: number;
+  pixels: number[];
+};
 type GeneratedRunSummary = {
   runId: string;
   topologyId?: string;
@@ -1432,6 +1449,7 @@ function GeneratedTrainingPanel({
         <div className="emptyTraining">No generated training metrics yet.</div>
       )}
       <MetricCharts runs={chartRuns} batchLosses={batchLosses} />
+      <DiagnosticsPanel diagnostics={displayedMetrics?.diagnostics} />
       <AblationQueuePanel queue={ablationQueue} currentTopologyId={currentTopologyId} onLoadVariant={onLoadVariant} />
       <div className="trainingRuntimeGrid">
         <div className="trainingLogPanel">
@@ -1645,6 +1663,121 @@ function TinyLineChart({
   );
 }
 
+function DiagnosticsPanel({ diagnostics }: { diagnostics?: RunDiagnostics | null }) {
+  if (!diagnostics) {
+    return null;
+  }
+  const confusion = diagnostics.confusion_matrix ?? [];
+  const perClass = diagnostics.per_class_accuracy ?? [];
+  const samples = diagnostics.prediction_samples ?? [];
+  const maxConfusion = Math.max(...confusion.flat(), 1);
+  return (
+    <div className="diagnosticsPanel">
+      <div className="subPanelHeader">
+        <strong>Diagnostics</strong>
+        <span>{diagnostics.test_samples ? `${diagnostics.test_samples.toLocaleString()} samples` : "latest run"}</span>
+      </div>
+      <div className="diagnosticsGrid">
+        <div className="confusionPanel">
+          <div className="diagnosticsTitle">
+            <strong>Confusion matrix</strong>
+            <span>rows true / columns predicted</span>
+          </div>
+          <div className="confusionMatrix" role="img" aria-label="Confusion matrix">
+            <span className="axisCorner" />
+            {Array.from({ length: 10 }, (_, digit) => (
+              <span className="axisLabel" key={`pred-${digit}`}>
+                {digit}
+              </span>
+            ))}
+            {Array.from({ length: 10 }, (_, truth) => (
+              <Fragment key={`row-${truth}`}>
+                <span className="axisLabel">{truth}</span>
+                {Array.from({ length: 10 }, (_, predicted) => {
+                  const value = confusion[truth]?.[predicted] ?? 0;
+                  const intensity = value / maxConfusion;
+                  return (
+                    <span
+                      className={truth === predicted ? "confusionCell correct" : "confusionCell"}
+                      key={`${truth}-${predicted}`}
+                      style={{ "--heat": intensity } as CSSProperties}
+                    >
+                      {value}
+                    </span>
+                  );
+                })}
+              </Fragment>
+            ))}
+          </div>
+        </div>
+        <div className="perClassPanel">
+          <div className="diagnosticsTitle">
+            <strong>Per-class accuracy</strong>
+            <span>digit-level signal</span>
+          </div>
+          <div className="perClassList">
+            {Array.from({ length: 10 }, (_, digit) => {
+              const item = perClass.find((entry) => entry.digit === digit);
+              const accuracy = item?.accuracy;
+              return (
+                <div className="perClassItem" key={digit}>
+                  <span>{digit}</span>
+                  <div>
+                    <i style={{ width: `${typeof accuracy === "number" ? Math.round(accuracy * 100) : 0}%` }} />
+                  </div>
+                  <strong>{formatMaybePercent(accuracy)}</strong>
+                  <small>
+                    {item?.correct ?? 0}/{item?.total ?? 0}
+                  </small>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="predictionPanel">
+          <div className="diagnosticsTitle">
+            <strong>Prediction samples</strong>
+            <span>predicted vs true</span>
+          </div>
+          <div className="predictionGrid">
+            {samples.slice(0, 16).map((sample, index) => (
+              <div className={`predictionSample ${sample.correct ? "correct" : "wrong"}`} key={`${sample.truth}-${sample.predicted}-${index}`}>
+                <DigitCanvas pixels={sample.pixels} />
+                <span>
+                  {sample.predicted} / {sample.truth}
+                </span>
+                <small>{formatMaybePercent(sample.confidence)}</small>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DigitCanvas({ pixels }: { pixels: number[] }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) {
+      return;
+    }
+    const image = context.createImageData(28, 28);
+    for (let index = 0; index < 28 * 28; index += 1) {
+      const value = Math.max(0, Math.min(255, pixels[index] ?? 0));
+      const offset = index * 4;
+      image.data[offset] = value;
+      image.data[offset + 1] = value;
+      image.data[offset + 2] = value;
+      image.data[offset + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+  }, [pixels]);
+  return <canvas className="digitCanvas" width={28} height={28} ref={canvasRef} />;
+}
+
 function AblationQueuePanel({
   queue,
   currentTopologyId,
@@ -1844,6 +1977,8 @@ function buildChartRuns(runHistory: GeneratedRunSummary[], currentMetrics: Gener
 function buildQueueReportRows(queue: AblationQueueItem[]) {
   return queue.map((item) => {
     const resolution = resolveTopology(item.project);
+    const weakestClass = weakestPerClass(item.metrics?.diagnostics);
+    const topConfusion = strongestConfusion(item.metrics?.diagnostics);
     return {
       label: item.label,
       note: item.note,
@@ -1851,6 +1986,7 @@ function buildQueueReportRows(queue: AblationQueueItem[]) {
       status: item.status,
       runId: item.runId ?? "",
       runPath: item.runId ? `runs/${item.runId}` : "",
+      diagnosticsPath: item.metrics?.diagnostics_path ?? (item.runId ? `runs/${item.runId}/diagnostics.json` : ""),
       seed: item.metrics?.seed ?? null,
       learningRate: item.metrics?.learning_rate ?? null,
       accuracy: item.metrics?.test_accuracy ?? null,
@@ -1862,6 +1998,9 @@ function buildQueueReportRows(queue: AblationQueueItem[]) {
       trainLoss: item.metrics?.train_loss ?? null,
       testLoss: item.metrics?.test_loss ?? null,
       finalBatchLoss: item.metrics?.final_batch_loss ?? null,
+      weakestDigit: weakestClass?.digit ?? null,
+      weakestDigitAccuracy: weakestClass?.accuracy ?? null,
+      topConfusion: topConfusion ? `${topConfusion.truth}->${topConfusion.predicted}:${topConfusion.count}` : "",
       parameters: resolution.totalParameters,
       flops: resolution.totalFlops,
       projectName: item.project.name,
@@ -1873,6 +2012,27 @@ function bestQueueVariant(queue: AblationQueueItem[]) {
   return queue
     .filter((item) => typeof (item.metrics?.best_accuracy ?? item.metrics?.test_accuracy) === "number")
     .sort((left, right) => (right.metrics?.best_accuracy ?? right.metrics?.test_accuracy ?? -1) - (left.metrics?.best_accuracy ?? left.metrics?.test_accuracy ?? -1))[0];
+}
+
+function weakestPerClass(diagnostics?: RunDiagnostics | null) {
+  return (diagnostics?.per_class_accuracy ?? [])
+    .filter((item) => typeof item.accuracy === "number" && item.total > 0)
+    .sort((left, right) => (left.accuracy ?? 1) - (right.accuracy ?? 1))[0];
+}
+
+function strongestConfusion(diagnostics?: RunDiagnostics | null): { truth: number; predicted: number; count: number } | null {
+  let strongest: { truth: number; predicted: number; count: number } | null = null;
+  const matrix = diagnostics?.confusion_matrix ?? [];
+  for (let truth = 0; truth < matrix.length; truth += 1) {
+    const row = matrix[truth] ?? [];
+    for (let predicted = 0; predicted < row.length; predicted += 1) {
+      const count = row[predicted] ?? 0;
+      if (truth !== predicted && count > (strongest?.count ?? 0)) {
+        strongest = { truth, predicted, count };
+      }
+    }
+  }
+  return strongest;
 }
 
 function hydrateExperimentQueue(value: unknown): AblationQueueItem[] {
@@ -1927,6 +2087,7 @@ function toCsv(rows: ReturnType<typeof buildQueueReportRows>) {
     "status",
     "runId",
     "runPath",
+    "diagnosticsPath",
     "seed",
     "learningRate",
     "accuracy",
@@ -1938,6 +2099,9 @@ function toCsv(rows: ReturnType<typeof buildQueueReportRows>) {
     "trainLoss",
     "testLoss",
     "finalBatchLoss",
+    "weakestDigit",
+    "weakestDigitAccuracy",
+    "topConfusion",
     "parameters",
     "flops",
     "projectName",

@@ -1082,7 +1082,8 @@ h1 {
 }
 
 .metricChartsPanel,
-.ablationQueuePanel {
+.ablationQueuePanel,
+.diagnosticsPanel {
   display: grid;
   gap: 8px;
 }
@@ -1216,6 +1217,150 @@ h1 {
   stroke: var(--red);
 }
 
+.diagnosticsGrid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.95fr) minmax(260px, 0.8fr) minmax(320px, 1fr);
+  gap: 10px;
+}
+
+.confusionPanel,
+.perClassPanel,
+.predictionPanel {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.diagnosticsTitle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.diagnosticsTitle strong {
+  color: var(--ink);
+  font-size: 0.92rem;
+}
+
+.diagnosticsTitle span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.confusionMatrix {
+  display: grid;
+  grid-template-columns: 20px repeat(10, minmax(20px, 1fr));
+  gap: 3px;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.axisCorner,
+.axisLabel,
+.confusionCell {
+  min-height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+}
+
+.axisLabel {
+  color: var(--muted);
+}
+
+.confusionCell {
+  border: 1px solid rgba(39, 91, 169, 0.1);
+  background: rgba(39, 91, 169, calc(0.08 + var(--heat) * 0.36));
+  color: var(--ink);
+}
+
+.confusionCell.correct {
+  border-color: rgba(23, 114, 69, 0.24);
+  background: rgba(23, 114, 69, calc(0.1 + var(--heat) * 0.36));
+}
+
+.perClassList {
+  display: grid;
+  gap: 7px;
+}
+
+.perClassItem {
+  display: grid;
+  grid-template-columns: 18px minmax(80px, 1fr) 48px 42px;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.perClassItem > span,
+.perClassItem strong {
+  color: var(--ink);
+}
+
+.perClassItem div {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8edf4;
+}
+
+.perClassItem i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--blue);
+}
+
+.predictionGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.predictionSample {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.predictionSample.correct {
+  border-color: rgba(23, 114, 69, 0.28);
+}
+
+.predictionSample.wrong {
+  border-color: rgba(159, 37, 54, 0.32);
+  background: #fff8f8;
+}
+
+.predictionSample span {
+  color: var(--ink);
+}
+
+.digitCanvas {
+  width: 38px;
+  height: 38px;
+  border-radius: 4px;
+  background: #101822;
+  image-rendering: pixelated;
+}
+
 .ablationQueueGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1272,6 +1417,7 @@ h1 {
 @media (max-width: 980px) {
   .queueToolbar,
   .metricChartGrid,
+  .diagnosticsGrid,
   .ablationQueueGrid {
     grid-template-columns: 1fr;
   }

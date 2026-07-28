@@ -9,9 +9,18 @@ export async function GET() {
   const metricsPath = projectPath("generated", "train_metrics.json");
   try {
     const metrics = JSON.parse(await readFile(metricsPath, "utf8"));
-    return NextResponse.json({ metrics });
+    const diagnostics = await readDiagnostics();
+    return NextResponse.json({ metrics: diagnostics ? { ...metrics, diagnostics } : metrics });
   } catch {
     return NextResponse.json({ metrics: null });
+  }
+}
+
+async function readDiagnostics() {
+  try {
+    return JSON.parse(await readFile(projectPath("generated", "diagnostics.json"), "utf8"));
+  } catch {
+    return null;
   }
 }
 

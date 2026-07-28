@@ -17,7 +17,7 @@ export async function GET() {
         if (!runStat?.isDirectory()) {
           return null;
         }
-        const metrics = await readJson(path.join(runDir, "metrics.json"));
+        const metrics = await metricsWithDiagnostics(await readJson(path.join(runDir, "metrics.json")), runDir);
         if (!metrics) {
           return null;
         }
@@ -44,6 +44,14 @@ async function readJson(filePath: string) {
   } catch {
     return null;
   }
+}
+
+async function metricsWithDiagnostics(metrics: Record<string, unknown> | null, runDir: string) {
+  if (!metrics) {
+    return null;
+  }
+  const diagnostics = await readJson(path.join(runDir, "diagnostics.json"));
+  return diagnostics ? { ...metrics, diagnostics } : metrics;
 }
 
 function stringField(value: Record<string, unknown>, key: string) {

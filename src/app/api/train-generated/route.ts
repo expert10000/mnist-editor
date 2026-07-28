@@ -52,7 +52,7 @@ export async function GET(request: Request) {
 
   const job = jobs.get(runId);
   if (job) {
-    job.metrics = (await readJson(path.join(job.runDir, "metrics.json"))) ?? job.metrics;
+    job.metrics = (await metricsWithDiagnostics((await readJson(path.join(job.runDir, "metrics.json"))) ?? job.metrics, job.runDir)) ?? job.metrics;
     const persistedLog = await readText(job.logPath);
     return NextResponse.json({
       runId: job.runId,
@@ -67,7 +67,7 @@ export async function GET(request: Request) {
   }
 
   const runDir = projectPath("runs", runId);
-  const metrics = await readJson(path.join(runDir, "metrics.json"));
+  const metrics = await metricsWithDiagnostics(await readJson(path.join(runDir, "metrics.json")), runDir);
   if (!metrics) {
     return NextResponse.json({ error: "Run not found." }, { status: 404 });
   }
@@ -135,6 +135,7 @@ export async function POST(request: Request) {
     best_epoch: 0,
     accuracy_delta: null,
     epoch_history: [],
+    diagnostics_path: path.join("runs", runId, "diagnostics.json"),
     checkpoint: path.join("runs", runId, "checkpoint.pt"),
     duration_seconds: 0,
     passed_smoke_rule: null,
@@ -169,6 +170,10 @@ export async function POST(request: Request) {
     path.join(runDir, "checkpoint.pt"),
     "--latest-checkpoint-path",
     path.join(generatedDir, "generated_mnist.pt"),
+    "--diagnostics-path",
+    path.join(runDir, "diagnostics.json"),
+    "--latest-diagnostics-path",
+    path.join(generatedDir, "diagnostics.json"),
     "--run-id",
     runId,
     "--topology-id",
@@ -249,7 +254,7 @@ async function finishJob(job: TrainJob, fallbackStatus: TrainJob["status"], erro
     return;
   }
   const metrics = (await readJson(path.join(job.runDir, "metrics.json"))) as Record<string, unknown> | null;
-  job.metrics = metrics ?? job.metrics;
+  job.metrics = (await metricsWithDiagnostics(metrics, job.runDir)) ?? job.metrics;
   job.status =
     metrics?.status === "complete" || metrics?.status === "failed" || metrics?.status === "cancelled" ? metrics.status : fallbackStatus;
   job.finishedAt = new Date().toISOString();
@@ -302,10 +307,22 @@ async function readText(filePath: string) {
   }
 }
 
+async function metricsWithDiagnostics(metrics: unknown, runDir: string) {
+  if (!isRecord(metrics)) {
+    return null;
+  }
+  const diagnostics = await readJson(path.join(runDir, "diagnostics.json"));
+  return isRecord(diagnostics) ? { ...metrics, diagnostics } : metrics;
+}
+
 function getString(value: unknown, key: string) {
   return typeof value === "object" && value !== null && key in value && typeof (value as Record<string, unknown>)[key] === "string"
     ? ((value as Record<string, string>)[key] as string)
     : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function timestampSegment(date: Date) {

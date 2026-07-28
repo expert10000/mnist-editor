@@ -53,6 +53,7 @@ class TrainMetrics:
     best_epoch: int
     accuracy_delta: float
     epoch_history: list[dict[str, float | int]]
+    diagnostics_path: str
     checkpoint: str
     duration_seconds: float
     passed_smoke_rule: bool
@@ -87,12 +88,82 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
         for images, labels in loader:
             images = images.to(device)
             labels = labels.to(device)
-            logits = model(images)
+            logits = primary_logits(model(images))
             loss = criterion(logits, labels)
             total_loss += loss.item() * images.size(0)
             correct += (logits.argmax(dim=1) == labels).sum().item()
             total += images.size(0)
     return total_loss / max(1, total), correct / max(1, total)
+
+
+def collect_diagnostics(model: nn.Module, loader: DataLoader, criterion: nn.Module, device: torch.device, max_samples: int = 16) -> dict[str, Any]:
+    model.eval()
+    confusion = [[0 for _ in range(10)] for _ in range(10)]
+    correct_by_class = [0 for _ in range(10)]
+    total_by_class = [0 for _ in range(10)]
+    samples: list[dict[str, Any]] = []
+    total_loss = 0.0
+    total = 0
+
+    with torch.no_grad():
+        for images, labels in loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            logits = primary_logits(model(images))
+            loss = criterion(logits, labels)
+            probabilities = torch.softmax(logits, dim=1)
+            predictions = logits.argmax(dim=1)
+            total_loss += loss.item() * images.size(0)
+            total += images.size(0)
+
+            for index, (label, prediction) in enumerate(zip(labels, predictions, strict=False)):
+                truth = int(label.item())
+                predicted = int(prediction.item())
+                confusion[truth][predicted] += 1
+                total_by_class[truth] += 1
+                if truth == predicted:
+                    correct_by_class[truth] += 1
+                if len(samples) < max_samples:
+                    pixels = (
+                        (images[index].detach().cpu().squeeze(0) * 0.3081 + 0.1307)
+                        .clamp(0, 1)
+                        .mul(255)
+                        .round()
+                        .to(torch.uint8)
+                        .flatten()
+                        .tolist()
+                    )
+                    samples.append(
+                        {
+                            "truth": truth,
+                            "predicted": predicted,
+                            "correct": truth == predicted,
+                            "confidence": float(probabilities[index, predicted].item()),
+                            "pixels": pixels,
+                        }
+                    )
+
+    per_class_accuracy = [
+        {
+            "digit": digit,
+            "accuracy": correct_by_class[digit] / total_by_class[digit] if total_by_class[digit] else None,
+            "correct": correct_by_class[digit],
+            "total": total_by_class[digit],
+        }
+        for digit in range(10)
+    ]
+    return {
+        "created_at": datetime.now(UTC).isoformat(),
+        "test_loss": total_loss / max(1, total),
+        "test_samples": total,
+        "confusion_matrix": confusion,
+        "per_class_accuracy": per_class_accuracy,
+        "prediction_samples": samples,
+    }
+
+
+def primary_logits(output: Any) -> torch.Tensor:
+    return output[0] if isinstance(output, tuple) else output
 
 
 def train(args: argparse.Namespace) -> TrainMetrics:
@@ -104,6 +175,8 @@ def train(args: argparse.Namespace) -> TrainMetrics:
     latest_metrics_path = resolve_path(args.latest_metrics_path, DEFAULT_METRICS_PATH)
     checkpoint_path = resolve_path(args.checkpoint_path, run_dir / "checkpoint.pt" if args.run_dir else DEFAULT_CHECKPOINT_PATH)
     latest_checkpoint_path = resolve_path(args.latest_checkpoint_path, DEFAULT_CHECKPOINT_PATH)
+    diagnostics_path = resolve_path(args.diagnostics_path, run_dir / "diagnostics.json" if args.run_dir else DEFAULT_GENERATED_DIR / "diagnostics.json")
+    latest_diagnostics_path = resolve_path(args.latest_diagnostics_path, DEFAULT_GENERATED_DIR / "diagnostics.json")
 
     torch.manual_seed(args.seed)
     random.seed(args.seed)
@@ -115,6 +188,8 @@ def train(args: argparse.Namespace) -> TrainMetrics:
     latest_metrics_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     latest_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+    latest_diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
 
     progress: dict[str, Any] = {
         "status": "running",
@@ -143,6 +218,7 @@ def train(args: argparse.Namespace) -> TrainMetrics:
         "best_epoch": 0,
         "accuracy_delta": None,
         "epoch_history": [],
+        "diagnostics_path": relative_path(diagnostics_path),
         "checkpoint": relative_path(checkpoint_path),
         "duration_seconds": 0.0,
         "passed_smoke_rule": None,
@@ -280,6 +356,8 @@ def train(args: argparse.Namespace) -> TrainMetrics:
 
     train_loss = running_loss / max(1, seen)
     train_accuracy = running_correct / max(1, seen)
+    diagnostics = collect_diagnostics(model, test_loader, criterion, device)
+    write_diagnostics(diagnostics, diagnostics_path, latest_diagnostics_path)
     passed_smoke_rule = bool(best_accuracy >= args.min_accuracy and first_batch_loss is not None and final_batch_loss < first_batch_loss)
     status = "complete" if passed_smoke_rule else "failed"
 
@@ -329,6 +407,7 @@ def train(args: argparse.Namespace) -> TrainMetrics:
         best_epoch=best_epoch,
         accuracy_delta=float(best_accuracy - baseline_accuracy),
         epoch_history=epoch_history,
+        diagnostics_path=relative_path(diagnostics_path),
         checkpoint=relative_path(checkpoint_path),
         duration_seconds=round(time.perf_counter() - start, 2),
         passed_smoke_rule=passed_smoke_rule,
@@ -348,6 +427,12 @@ def write_progress(payload: dict[str, Any], metrics_path: Path, latest_metrics_p
     metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf8")
     if metrics_path != latest_metrics_path:
         latest_metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf8")
+
+
+def write_diagnostics(payload: dict[str, Any], diagnostics_path: Path, latest_diagnostics_path: Path) -> None:
+    diagnostics_path.write_text(json.dumps(payload, indent=2), encoding="utf8")
+    if diagnostics_path != latest_diagnostics_path:
+        latest_diagnostics_path.write_text(json.dumps(payload, indent=2), encoding="utf8")
 
 
 def resolve_path(value: str | None, fallback: Path) -> Path:
@@ -382,6 +467,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--latest-metrics-path")
     parser.add_argument("--checkpoint-path")
     parser.add_argument("--latest-checkpoint-path")
+    parser.add_argument("--diagnostics-path")
+    parser.add_argument("--latest-diagnostics-path")
     parser.add_argument("--run-id", default="latest")
     parser.add_argument("--topology-id", default="default")
     parser.add_argument("--created-at")

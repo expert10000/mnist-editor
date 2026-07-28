@@ -56,6 +56,14 @@ type TrainSettings = {
 };
 type RunPreset = "fast" | "balanced" | "stronger" | "custom";
 type QueuePreset = "width" | "dropPath" | "pooling" | "se";
+type VariantScope = "selected" | "all";
+type VariantBuilderSettings = {
+  scope: VariantScope;
+  widthDelta: number;
+  dropPathDelta: number;
+  poolingMode: "gap" | "gap_gmp";
+  useSe: boolean;
+};
 type GeneratedTrainMetrics = {
   status: string;
   run_id?: string;
@@ -124,6 +132,13 @@ type WinnerSummary = {
   detail: string;
   diffSummary: string;
   bestId: string;
+};
+type VariantPreview = {
+  project: TopologyProject;
+  label: string;
+  note: string;
+  diff: TopologyDiff;
+  targetLabel: string;
 };
 type ReplayComparison = {
   createdAt: string;
@@ -231,6 +246,13 @@ export default function Home() {
     preset: "balanced",
     ...RUN_PRESETS.balanced,
     cpu: true,
+  });
+  const [variantBuilder, setVariantBuilder] = useState<VariantBuilderSettings>({
+    scope: "selected",
+    widthDelta: 0,
+    dropPathDelta: 0,
+    poolingMode: "gap_gmp",
+    useSe: true,
   });
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -403,6 +425,67 @@ export default function Home() {
     } finally {
       void loadGeneratedRuns();
     }
+  }
+
+  async function trainVariantProject(variantProject: TopologyProject, label: string, note: string) {
+    const variantId = `builder-${Date.now()}`;
+    const variantTopologyId = topologyVersionId(variantProject);
+    const baselineMetrics =
+      trainMetrics?.topology_id === currentTopologyId || (!trainMetrics?.topology_id && trainMetrics) ? (trainMetrics as NonNullable<GeneratedTrainMetrics>) : undefined;
+    const baselineItem: AblationQueueItem = {
+      id: "builder-baseline",
+      label: "Baseline",
+      note: "Current canvas before variant",
+      project,
+      topologyId: currentTopologyId,
+      status: baselineMetrics ? "complete" : "queued",
+      metrics: baselineMetrics,
+    };
+    const variantItem: AblationQueueItem = {
+      id: variantId,
+      label,
+      note,
+      project: variantProject,
+      topologyId: variantTopologyId,
+      status: "running",
+    };
+    setAblationQueue((current) => {
+      const withoutOldBuilder = current.filter((item) => !item.id.startsWith("builder-"));
+      return [baselineItem, ...withoutOldBuilder, variantItem];
+    });
+    setTrainingBusy(true);
+    setTrainingLogs([]);
+    setNotice({ tone: "good", text: `Training ${label}.` });
+    try {
+      const started = await startGeneratedRun(variantProject);
+      setAblationQueue((current) => updateQueueItem(current, variantId, { runId: started.runId }));
+      const finished = await waitForGeneratedRun(started.runId);
+      setAblationQueue((current) =>
+        updateQueueItem(current, variantId, {
+          status: finished.status,
+          metrics: finished.metrics,
+          error: finished.error,
+        }),
+      );
+      setNotice({ tone: finished.status === "complete" ? "good" : "bad", text: finished.status === "complete" ? `${label} completed.` : `${label} did not pass.` });
+    } catch (error) {
+      setAblationQueue((current) => updateQueueItem(current, variantId, { status: "failed", error: error instanceof Error ? error.message : "Variant training failed." }));
+      setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Variant training failed." });
+    } finally {
+      setTrainingBusy(false);
+      setActiveRunId(null);
+      void loadGeneratedMetrics();
+      void loadGeneratedRuns();
+    }
+  }
+
+  function promoteVariantProject(variantProject: TopologyProject, label: string) {
+    commitProject(variantProject);
+    const nextSelected = variantProject.nodes.some((node) => node.id === selectedNodeId) ? selectedNodeId : variantProject.nodes[0]?.id;
+    if (nextSelected) {
+      setSelectedNodeId(nextSelected);
+    }
+    setNotice({ tone: "good", text: `${label} promoted to the canvas.` });
   }
 
   function buildAblationQueue() {
@@ -1047,6 +1130,8 @@ export default function Home() {
         runsBusy={runsBusy}
         selectedRunId={selectedRunId}
         currentTopologyId={currentTopologyId}
+        selectedNodeId={selectedNodeId}
+        variantBuilder={variantBuilder}
         ablationQueue={ablationQueue}
         queueBusy={queueBusy}
         queuePreset={queuePreset}
@@ -1056,6 +1141,9 @@ export default function Home() {
         experimentsBusy={experimentsBusy}
         settings={trainSettings}
         onSettingsChange={setTrainSettings}
+        onVariantBuilderChange={setVariantBuilder}
+        onTrainVariant={(variantProject, label, note) => void trainVariantProject(variantProject, label, note)}
+        onPromoteVariant={promoteVariantProject}
         onExperimentNameChange={setExperimentName}
         onQueuePresetChange={changeQueuePreset}
         onLoadExperiment={loadSavedExperiment}
@@ -1313,6 +1401,8 @@ function GeneratedTrainingPanel({
   runsBusy,
   selectedRunId,
   currentTopologyId,
+  selectedNodeId,
+  variantBuilder,
   ablationQueue,
   queueBusy,
   queuePreset,
@@ -1322,6 +1412,9 @@ function GeneratedTrainingPanel({
   experimentsBusy,
   settings,
   onSettingsChange,
+  onVariantBuilderChange,
+  onTrainVariant,
+  onPromoteVariant,
   onExperimentNameChange,
   onQueuePresetChange,
   onLoadExperiment,
@@ -1352,6 +1445,8 @@ function GeneratedTrainingPanel({
   runsBusy: boolean;
   selectedRunId: string | null;
   currentTopologyId: string;
+  selectedNodeId: string;
+  variantBuilder: VariantBuilderSettings;
   ablationQueue: AblationQueueItem[];
   queueBusy: boolean;
   queuePreset: QueuePreset;
@@ -1361,6 +1456,9 @@ function GeneratedTrainingPanel({
   experimentsBusy: boolean;
   settings: TrainSettings;
   onSettingsChange: (settings: TrainSettings) => void;
+  onVariantBuilderChange: (settings: VariantBuilderSettings) => void;
+  onTrainVariant: (variantProject: TopologyProject, label: string, note: string) => void;
+  onPromoteVariant: (variantProject: TopologyProject, label: string) => void;
   onExperimentNameChange: (name: string) => void;
   onQueuePresetChange: (preset: QueuePreset) => void;
   onLoadExperiment: (name: string) => void;
@@ -1409,6 +1507,7 @@ function GeneratedTrainingPanel({
   const topologyDiff = useMemo(() => buildTopologyDiff(enhancedFiveBlockTopology, project), [project]);
   const currentResolution = useMemo(() => resolveTopology(project), [project]);
   const winnerSummary = useMemo(() => buildWinnerSummary(ablationQueue), [ablationQueue]);
+  const variantPreview = useMemo(() => buildVariantPreview(project, selectedNodeId, variantBuilder), [project, selectedNodeId, variantBuilder]);
 
   return (
     <section className="trainingPanel">
@@ -1579,6 +1678,14 @@ function GeneratedTrainingPanel({
           </div>
         </div>
       ) : null}
+      <VariantBuilderPanel
+        settings={variantBuilder}
+        preview={variantPreview}
+        trainingBusy={trainingBusy || queueBusy}
+        onSettingsChange={onVariantBuilderChange}
+        onTrainVariant={() => onTrainVariant(variantPreview.project, variantPreview.label, variantPreview.note)}
+        onPromoteVariant={() => onPromoteVariant(variantPreview.project, variantPreview.label)}
+      />
       <TraceabilityPanel
         topologyId={currentTopologyId}
         metrics={displayedMetrics}
@@ -1788,6 +1895,106 @@ function QueueToolbar({
         <Download size={15} />
         CSV
       </button>
+    </div>
+  );
+}
+
+function VariantBuilderPanel({
+  settings,
+  preview,
+  trainingBusy,
+  onSettingsChange,
+  onTrainVariant,
+  onPromoteVariant,
+}: {
+  settings: VariantBuilderSettings;
+  preview: VariantPreview;
+  trainingBusy: boolean;
+  onSettingsChange: (settings: VariantBuilderSettings) => void;
+  onTrainVariant: () => void;
+  onPromoteVariant: () => void;
+}) {
+  function update<K extends keyof VariantBuilderSettings>(key: K, value: VariantBuilderSettings[K]) {
+    onSettingsChange({ ...settings, [key]: value });
+  }
+
+  return (
+    <div className="variantBuilderPanel">
+      <div className="subPanelHeader">
+        <strong>Variant builder</strong>
+        <span>{preview.targetLabel}</span>
+      </div>
+      <div className="variantBuilderGrid">
+        <div className="variantControls">
+          <label>
+            <span>Apply to</span>
+            <select value={settings.scope} onChange={(event) => update("scope", event.target.value as VariantScope)}>
+              <option value="selected">Selected block</option>
+              <option value="all">All residual blocks</option>
+            </select>
+          </label>
+          <label>
+            <span>Width delta <strong>{formatSignedInteger(settings.widthDelta)}</strong></span>
+            <input min={-64} max={64} step={4} type="range" value={settings.widthDelta} onChange={(event) => update("widthDelta", Number(event.target.value))} />
+          </label>
+          <label>
+            <span>Drop-path delta <strong>{formatSignedDecimal(settings.dropPathDelta)}</strong></span>
+            <input
+              min={-0.05}
+              max={0.05}
+              step={0.005}
+              type="range"
+              value={settings.dropPathDelta}
+              onChange={(event) => update("dropPathDelta", Number(event.target.value))}
+            />
+          </label>
+          <div className="variantToggles">
+            <label>
+              <span>Pooling</span>
+              <select value={settings.poolingMode} onChange={(event) => update("poolingMode", event.target.value as VariantBuilderSettings["poolingMode"])}>
+                <option value="gap">GAP</option>
+                <option value="gap_gmp">GAP + GMP</option>
+              </select>
+            </label>
+            <label className="variantToggle">
+              <span>SE</span>
+              <input type="checkbox" checked={settings.useSe} onChange={(event) => update("useSe", event.target.checked)} />
+            </label>
+          </div>
+        </div>
+        <div className="variantPreview">
+          <div className="diagnosticsTitle">
+            <strong>Architecture change preview</strong>
+            <span>{preview.label}</span>
+          </div>
+          <div className="variantPreviewStats">
+            <span>
+              Params <strong>{formatDeltaCompact(preview.diff.paramsDelta)}</strong>
+            </span>
+            <span>
+              FLOPs <strong>{formatDeltaCompact(preview.diff.flopsDelta)}</strong>
+            </span>
+            <span>
+              Queue label <strong>{preview.label}</strong>
+            </span>
+          </div>
+          <ul className="diffList">
+            {(preview.diff.lines.length > 0 ? preview.diff.lines : ["No changes from the current canvas."]).slice(0, 6).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          <div className="variantActions">
+            <button type="button" onClick={onTrainVariant} disabled={trainingBusy || preview.diff.totalChanges === 0}>
+              <Play size={15} />
+              Train this variant
+            </button>
+            <button type="button" onClick={onPromoteVariant} disabled={trainingBusy || preview.diff.totalChanges === 0}>
+              <Upload size={15} />
+              Promote to canvas
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2271,6 +2478,53 @@ function mutateProject(project: TopologyProject, suffix: string, mutateNode: (no
 
 function updateQueueItem(queue: AblationQueueItem[], id: string, patch: Partial<AblationQueueItem>) {
   return queue.map((item) => (item.id === id ? { ...item, ...patch } : item));
+}
+
+function buildVariantPreview(project: TopologyProject, selectedNodeId: string, settings: VariantBuilderSettings): VariantPreview {
+  const selectedNode = project.nodes.find((node) => node.id === selectedNodeId);
+  const selectedIsResidual = selectedNode?.kind === "multi_branch_residual";
+  const targetLabel = settings.scope === "all" ? "all residual blocks" : selectedIsResidual ? selectedNode.name : "select a residual block";
+  const projectVariant: TopologyProject = {
+    ...project,
+    name: `${project.name} / Builder variant`,
+    nodes: project.nodes.map((node) => {
+      const shouldMutateResidual = node.kind === "multi_branch_residual" && (settings.scope === "all" || node.id === selectedNodeId);
+      if (shouldMutateResidual) {
+        const width = typeof node.parameters.out_channels === "number" ? Math.max(4, nearestMultiple(node.parameters.out_channels + settings.widthDelta, 4)) : node.parameters.out_channels;
+        const dropPath =
+          typeof node.parameters.drop_path === "number" ? Number(Math.max(0, Math.min(0.25, node.parameters.drop_path + settings.dropPathDelta)).toFixed(3)) : node.parameters.drop_path;
+        return {
+          ...node,
+          parameters: {
+            ...node.parameters,
+            out_channels: width,
+            drop_path: dropPath,
+            use_se: settings.useSe,
+          },
+        };
+      }
+      if (node.kind === "pooling_fusion") {
+        return { ...node, parameters: { ...node.parameters, mode: settings.poolingMode } };
+      }
+      return node;
+    }),
+    edges: project.edges.map((edge) => ({ ...edge })),
+  };
+  const diff = buildTopologyDiff(project, projectVariant);
+  const labelParts = [
+    settings.scope === "all" ? "All blocks" : selectedIsResidual ? selectedNode.name : "Variant",
+    settings.widthDelta ? `width ${formatSignedInteger(settings.widthDelta)}` : "",
+    settings.dropPathDelta ? `drop ${formatSignedDecimal(settings.dropPathDelta)}` : "",
+    `SE ${settings.useSe ? "on" : "off"}`,
+    settings.poolingMode === "gap" ? "GAP" : "GAP+GMP",
+  ].filter(Boolean);
+  return {
+    project: projectVariant,
+    label: labelParts.join(" / "),
+    note: diff.summaryText,
+    diff,
+    targetLabel,
+  };
 }
 
 function buildTopologyDiff(base: TopologyProject, project: TopologyProject): TopologyDiff {
@@ -2817,6 +3071,17 @@ function formatLossDrop(value: number | null | undefined) {
 function formatDeltaCompact(value: number) {
   const sign = value > 0 ? "+" : value < 0 ? "-" : "";
   return `${sign}${formatCompactNumber(Math.abs(value))}`;
+}
+
+function formatSignedInteger(value: number) {
+  return value > 0 ? `+${value}` : String(value);
+}
+
+function formatSignedDecimal(value: number) {
+  if (value === 0) {
+    return "0";
+  }
+  return `${value > 0 ? "+" : ""}${value.toFixed(3)}`;
 }
 
 function formatMaybeNumber(value: number | null | undefined) {

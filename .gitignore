@@ -10,3 +10,5 @@ data/
 generated/*.pt
 runs/*
 !runs/.gitkeep
+experiments/*
+!experiments/.gitkeep

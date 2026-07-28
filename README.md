@@ -59,5 +59,6 @@ This repository starts with the Phase 1 dashboard prototype:
 - ablation queue for running multiple topology variants one after another.
 - queue presets for width, drop-path, pooling mode, and SE on/off sweeps;
 - queue stop/cancel, queued-item clearing that keeps completed results, JSON/CSV comparison export, and click-to-load variants back onto the canvas.
+- saved experiment sessions under `experiments/`, including preset, variant topologies, run IDs, metrics, reports, and best-variant reload.
 
-Next phases will add OOF-aware experiment generation and richer export/reporting for completed runs.
+Next phases will add OOF-aware experiment generation and richer cross-experiment dashboards.

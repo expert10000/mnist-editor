@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Download,
   FileCode2,
+  FolderOpen,
   Link2,
   ListChecks,
   LoaderCircle,
@@ -13,10 +14,12 @@ import {
   Play,
   Redo2,
   RefreshCw,
+  Save,
   ScrollText,
   Table2,
   TriangleAlert,
   Trash2,
+  Trophy,
   Undo2,
   Unlink2,
   Upload,
@@ -80,6 +83,23 @@ type GeneratedRunSummary = {
   status: string;
   metrics: NonNullable<GeneratedTrainMetrics>;
 };
+type ExperimentSummary = {
+  name: string;
+  preset: string;
+  updatedAt: string;
+  bestVariantId: string;
+  variantCount: number;
+};
+type ExperimentSession = {
+  name: string;
+  displayName?: string;
+  preset: QueuePreset;
+  createdAt: string;
+  updatedAt: string;
+  bestVariantId: string;
+  queue: AblationQueueItem[];
+  reportRows: ReturnType<typeof buildQueueReportRows>;
+};
 type AblationQueueItem = {
   id: string;
   label: string;
@@ -118,6 +138,10 @@ export default function Home() {
   const [ablationQueue, setAblationQueue] = useState<AblationQueueItem[]>([]);
   const [queueBusy, setQueueBusy] = useState(false);
   const [queuePreset, setQueuePreset] = useState<QueuePreset>("width");
+  const [experimentName, setExperimentName] = useState("width-sweep-001");
+  const [savedExperiments, setSavedExperiments] = useState<ExperimentSummary[]>([]);
+  const [selectedExperimentName, setSelectedExperimentName] = useState("");
+  const [experimentsBusy, setExperimentsBusy] = useState(false);
   const [trainSettings, setTrainSettings] = useState<TrainSettings>({
     epochs: 1,
     trainLimit: 1024,
@@ -164,10 +188,22 @@ export default function Home() {
     }
   }, []);
 
+  const loadExperiments = useCallback(async () => {
+    setExperimentsBusy(true);
+    try {
+      const response = await fetch("/api/experiments", { cache: "no-store" });
+      const payload = await response.json();
+      setSavedExperiments(Array.isArray(payload.experiments) ? payload.experiments : []);
+    } finally {
+      setExperimentsBusy(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadGeneratedMetrics();
     void loadGeneratedRuns();
-  }, [loadGeneratedMetrics, loadGeneratedRuns]);
+    void loadExperiments();
+  }, [loadExperiments, loadGeneratedMetrics, loadGeneratedRuns]);
 
   useEffect(() => {
     if (!trainingBusy || !activeRunId || queueBusy) {
@@ -289,11 +325,15 @@ export default function Home() {
   function buildAblationQueue() {
     const variants = createAblationVariants(project, queuePreset);
     setAblationQueue(variants);
+    if (!experimentName.trim()) {
+      setExperimentName(defaultExperimentName(queuePreset));
+    }
     setNotice({ tone: "good", text: `Queued ${variants.length} topology variants.` });
   }
 
   async function runAblationQueue() {
     const preparedQueue = ablationQueue.length > 0 ? ablationQueue : createAblationVariants(project, queuePreset);
+    let latestQueue = preparedQueue;
     setAblationQueue(preparedQueue);
     queueCancelRef.current = false;
     setQueueBusy(true);
@@ -308,21 +348,25 @@ export default function Home() {
         if (item.status === "complete") {
           continue;
         }
-        setAblationQueue((current) => updateQueueItem(current, item.id, { status: "running", error: undefined }));
+        latestQueue = updateQueueItem(latestQueue, item.id, { status: "running", error: undefined });
+        setAblationQueue(latestQueue);
         const started = await startGeneratedRun(item.project);
-        setAblationQueue((current) => updateQueueItem(current, item.id, { runId: started.runId }));
+        latestQueue = updateQueueItem(latestQueue, item.id, { runId: started.runId });
+        setAblationQueue(latestQueue);
         const finished = await waitForGeneratedRun(started.runId);
-        setAblationQueue((current) =>
-          updateQueueItem(current, item.id, {
-            status: finished.status,
-            metrics: finished.metrics,
-            error: finished.error,
-          }),
-        );
+        latestQueue = updateQueueItem(latestQueue, item.id, {
+          status: finished.status,
+          metrics: finished.metrics,
+          error: finished.error,
+        });
+        setAblationQueue(latestQueue);
         void loadGeneratedRuns();
         if (finished.status === "cancelled") {
           break;
         }
+      }
+      if (latestQueue.length > 0) {
+        await saveExperimentSnapshot(latestQueue);
       }
       setNotice({ tone: queueCancelRef.current ? "bad" : "good", text: queueCancelRef.current ? "Ablation queue stopped." : "Ablation queue completed." });
     } catch (error) {
@@ -382,6 +426,76 @@ export default function Home() {
     }
     downloadTextFile("mnist-ablation-report.csv", toCsv(rows), "text/csv");
     setNotice({ tone: "good", text: "CSV comparison report exported." });
+  }
+
+  async function saveExperimentSnapshot(queue = ablationQueue) {
+    if (queue.length === 0) {
+      setNotice({ tone: "bad", text: "Build a queue before saving an experiment." });
+      return;
+    }
+    const best = bestQueueVariant(queue);
+    const name = experimentName.trim() || defaultExperimentName(queuePreset);
+    setExperimentName(name);
+    const response = await fetch("/api/experiments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        preset: queuePreset,
+        queue,
+        bestVariantId: best?.id ?? "",
+        reportRows: buildQueueReportRows(queue),
+      }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.error ?? "Could not save the experiment.");
+    }
+    setSelectedExperimentName(payload.experiment?.name ?? name);
+    await loadExperiments();
+    setNotice({ tone: "good", text: `Saved experiment ${payload.experiment?.name ?? name}.` });
+  }
+
+  async function loadSavedExperiment(name: string) {
+    if (!name) {
+      return;
+    }
+    setExperimentsBusy(true);
+    try {
+      const response = await fetch(`/api/experiments?name=${encodeURIComponent(name)}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Could not load the experiment.");
+      }
+      const experiment = payload.experiment as ExperimentSession;
+      const queue = hydrateExperimentQueue(experiment.queue);
+      setExperimentName(experiment.displayName ?? experiment.name);
+      setSelectedExperimentName(experiment.name);
+      setQueuePreset(isQueuePreset(experiment.preset) ? experiment.preset : "width");
+      setAblationQueue(queue);
+      setNotice({ tone: "good", text: `Loaded experiment ${experiment.displayName ?? experiment.name}.` });
+    } catch (error) {
+      setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Could not load the experiment." });
+    } finally {
+      setExperimentsBusy(false);
+    }
+  }
+
+  function loadBestVariant() {
+    const best = bestQueueVariant(ablationQueue);
+    if (!best) {
+      setNotice({ tone: "bad", text: "No completed queue result has an accuracy yet." });
+      return;
+    }
+    loadQueueVariant(best);
+    setNotice({ tone: "good", text: `Loaded best variant: ${best.label}.` });
+  }
+
+  function changeQueuePreset(preset: QueuePreset) {
+    setQueuePreset(preset);
+    if (!experimentName.trim()) {
+      setExperimentName(defaultExperimentName(preset));
+    }
   }
 
   function refreshTrainingState() {
@@ -735,9 +849,17 @@ export default function Home() {
         ablationQueue={ablationQueue}
         queueBusy={queueBusy}
         queuePreset={queuePreset}
+        experimentName={experimentName}
+        savedExperiments={savedExperiments}
+        selectedExperimentName={selectedExperimentName}
+        experimentsBusy={experimentsBusy}
         settings={trainSettings}
         onSettingsChange={setTrainSettings}
-        onQueuePresetChange={setQueuePreset}
+        onExperimentNameChange={setExperimentName}
+        onQueuePresetChange={changeQueuePreset}
+        onLoadExperiment={loadSavedExperiment}
+        onSaveExperiment={() => void saveExperimentSnapshot()}
+        onLoadBest={loadBestVariant}
         onRefresh={refreshTrainingState}
         onRun={runGeneratedTraining}
         onBuildQueue={buildAblationQueue}
@@ -987,9 +1109,17 @@ function GeneratedTrainingPanel({
   ablationQueue,
   queueBusy,
   queuePreset,
+  experimentName,
+  savedExperiments,
+  selectedExperimentName,
+  experimentsBusy,
   settings,
   onSettingsChange,
+  onExperimentNameChange,
   onQueuePresetChange,
+  onLoadExperiment,
+  onSaveExperiment,
+  onLoadBest,
   onRefresh,
   onRun,
   onBuildQueue,
@@ -1012,9 +1142,17 @@ function GeneratedTrainingPanel({
   ablationQueue: AblationQueueItem[];
   queueBusy: boolean;
   queuePreset: QueuePreset;
+  experimentName: string;
+  savedExperiments: ExperimentSummary[];
+  selectedExperimentName: string;
+  experimentsBusy: boolean;
   settings: TrainSettings;
   onSettingsChange: (settings: TrainSettings) => void;
+  onExperimentNameChange: (name: string) => void;
   onQueuePresetChange: (preset: QueuePreset) => void;
+  onLoadExperiment: (name: string) => void;
+  onSaveExperiment: () => void;
+  onLoadBest: () => void;
   onRefresh: () => void;
   onRun: () => void;
   onBuildQueue: () => void;
@@ -1136,9 +1274,17 @@ function GeneratedTrainingPanel({
       <p className="trainingNote">Default settings are tuned for a quick real-MNIST compiler check.</p>
       <QueueToolbar
         preset={queuePreset}
+        experimentName={experimentName}
+        selectedExperimentName={selectedExperimentName}
+        savedExperiments={savedExperiments}
         queueLength={ablationQueue.length}
         queueBusy={queueBusy}
+        experimentsBusy={experimentsBusy}
+        onExperimentNameChange={onExperimentNameChange}
         onPresetChange={onQueuePresetChange}
+        onLoadExperiment={onLoadExperiment}
+        onSaveExperiment={onSaveExperiment}
+        onLoadBest={onLoadBest}
         onBuildQueue={onBuildQueue}
         onClearQueue={onClearQueue}
         onExportReport={onExportReport}
@@ -1222,23 +1368,43 @@ function GeneratedTrainingPanel({
 
 function QueueToolbar({
   preset,
+  experimentName,
+  selectedExperimentName,
+  savedExperiments,
   queueLength,
   queueBusy,
+  experimentsBusy,
+  onExperimentNameChange,
   onPresetChange,
+  onLoadExperiment,
+  onSaveExperiment,
+  onLoadBest,
   onBuildQueue,
   onClearQueue,
   onExportReport,
 }: {
   preset: QueuePreset;
+  experimentName: string;
+  selectedExperimentName: string;
+  savedExperiments: ExperimentSummary[];
   queueLength: number;
   queueBusy: boolean;
+  experimentsBusy: boolean;
+  onExperimentNameChange: (name: string) => void;
   onPresetChange: (preset: QueuePreset) => void;
+  onLoadExperiment: (name: string) => void;
+  onSaveExperiment: () => void;
+  onLoadBest: () => void;
   onBuildQueue: () => void;
   onClearQueue: () => void;
   onExportReport: (format: "json" | "csv") => void;
 }) {
   return (
     <div className="queueToolbar">
+      <label>
+        <span>Experiment</span>
+        <input value={experimentName} onChange={(event) => onExperimentNameChange(event.target.value)} disabled={queueBusy} />
+      </label>
       <label>
         <span>Preset</span>
         <select value={preset} onChange={(event) => onPresetChange(event.target.value as QueuePreset)} disabled={queueBusy}>
@@ -1248,9 +1414,32 @@ function QueueToolbar({
           <option value="se">SE on/off sweep</option>
         </select>
       </label>
+      <label>
+        <span>Saved</span>
+        <select value={selectedExperimentName} onChange={(event) => onLoadExperiment(event.target.value)} disabled={queueBusy || experimentsBusy}>
+          <option value="">Load session</option>
+          {savedExperiments.map((experiment) => (
+            <option key={experiment.name} value={experiment.name}>
+              {experiment.name} ({experiment.variantCount})
+            </option>
+          ))}
+        </select>
+      </label>
       <button type="button" onClick={onBuildQueue} disabled={queueBusy}>
         <ListChecks size={15} />
         Build
+      </button>
+      <button type="button" onClick={onSaveExperiment} disabled={queueBusy || queueLength === 0}>
+        <Save size={15} />
+        Save
+      </button>
+      <button type="button" onClick={onLoadBest} disabled={queueLength === 0}>
+        <Trophy size={15} />
+        Best
+      </button>
+      <button type="button" onClick={() => selectedExperimentName && onLoadExperiment(selectedExperimentName)} disabled={queueBusy || !selectedExperimentName}>
+        <FolderOpen size={15} />
+        Reload
       </button>
       <button type="button" onClick={onClearQueue} disabled={queueBusy || queueLength === 0}>
         <Trash2 size={15} />
@@ -1555,6 +1744,56 @@ function buildQueueReportRows(queue: AblationQueueItem[]) {
   });
 }
 
+function bestQueueVariant(queue: AblationQueueItem[]) {
+  return queue
+    .filter((item) => typeof item.metrics?.test_accuracy === "number")
+    .sort((left, right) => (right.metrics?.test_accuracy ?? -1) - (left.metrics?.test_accuracy ?? -1))[0];
+}
+
+function hydrateExperimentQueue(value: unknown): AblationQueueItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item): AblationQueueItem | null => {
+      if (!isRecord(item)) {
+        return null;
+      }
+      const parsed = parseTopologyProject(item.project);
+      if (!parsed.project) {
+        return null;
+      }
+      const id = typeof item.id === "string" ? item.id : topologyVersionId(parsed.project);
+      const status = isQueueStatus(item.status) ? item.status : "queued";
+      return {
+        id,
+        label: typeof item.label === "string" ? item.label : id,
+        note: typeof item.note === "string" ? item.note : "",
+        project: parsed.project,
+        topologyId: typeof item.topologyId === "string" ? item.topologyId : topologyVersionId(parsed.project),
+        status,
+        runId: typeof item.runId === "string" ? item.runId : undefined,
+        metrics: isRecord(item.metrics) ? (item.metrics as NonNullable<GeneratedTrainMetrics>) : undefined,
+        error: typeof item.error === "string" ? item.error : undefined,
+      };
+    })
+    .filter((item): item is AblationQueueItem => Boolean(item));
+}
+
+function isQueuePreset(value: unknown): value is QueuePreset {
+  return value === "width" || value === "dropPath" || value === "pooling" || value === "se";
+}
+
+function isQueueStatus(value: unknown): value is AblationQueueItem["status"] {
+  return value === "queued" || value === "running" || value === "complete" || value === "failed" || value === "cancelled";
+}
+
+function defaultExperimentName(preset: QueuePreset) {
+  const prefix =
+    preset === "width" ? "width-sweep" : preset === "dropPath" ? "drop-path-sweep" : preset === "pooling" ? "pooling-sweep" : "se-sweep";
+  return `${prefix}-001`;
+}
+
 function toCsv(rows: ReturnType<typeof buildQueueReportRows>) {
   const headers = [
     "label",
@@ -1587,6 +1826,10 @@ function downloadTextFile(filename: string, content: string, type: string) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseBatchLosses(logs: string[]) {

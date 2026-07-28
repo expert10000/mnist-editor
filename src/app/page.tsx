@@ -48,6 +48,7 @@ type TrainSettings = {
   batchSize: number;
   cpu: boolean;
 };
+type QueuePreset = "width" | "dropPath" | "pooling" | "se";
 type GeneratedTrainMetrics = {
   status: string;
   run_id?: string;
@@ -85,7 +86,7 @@ type AblationQueueItem = {
   note: string;
   project: TopologyProject;
   topologyId: string;
-  status: "queued" | "running" | "complete" | "failed";
+  status: "queued" | "running" | "complete" | "failed" | "cancelled";
   runId?: string;
   metrics?: NonNullable<GeneratedTrainMetrics>;
   error?: string;
@@ -116,6 +117,7 @@ export default function Home() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [ablationQueue, setAblationQueue] = useState<AblationQueueItem[]>([]);
   const [queueBusy, setQueueBusy] = useState(false);
+  const [queuePreset, setQueuePreset] = useState<QueuePreset>("width");
   const [trainSettings, setTrainSettings] = useState<TrainSettings>({
     epochs: 1,
     trainLimit: 1024,
@@ -126,6 +128,7 @@ export default function Home() {
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  const queueCancelRef = useRef(false);
   const suppressClickRef = useRef(false);
   const project = history.present;
   const resolution = useMemo(() => resolveTopology(project), [project]);
@@ -232,16 +235,39 @@ export default function Home() {
       await sleep(1000);
       const response = await fetch(`/api/train-generated?runId=${encodeURIComponent(runId)}`, { cache: "no-store" });
       const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error ?? `Could not read run ${runId}.`);
+      }
       if (payload.metrics) {
         setTrainMetrics(payload.metrics);
       }
       if (Array.isArray(payload.logs)) {
         setTrainingLogs(payload.logs);
       }
-      if (payload.status === "complete" || payload.status === "failed") {
-        return payload as { status: "complete" | "failed"; metrics?: NonNullable<GeneratedTrainMetrics>; logs?: string[]; error?: string };
+      if (payload.status === "complete" || payload.status === "failed" || payload.status === "cancelled") {
+        return payload as {
+          status: "complete" | "failed" | "cancelled";
+          metrics?: NonNullable<GeneratedTrainMetrics>;
+          logs?: string[];
+          error?: string;
+        };
       }
     }
+  }
+
+  async function cancelGeneratedRun(runId: string) {
+    const response = await fetch(`/api/train-generated?runId=${encodeURIComponent(runId)}`, { method: "DELETE" });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.error ?? `Could not cancel run ${runId}.`);
+    }
+    if (payload?.metrics) {
+      setTrainMetrics(payload.metrics);
+    }
+    if (Array.isArray(payload?.logs)) {
+      setTrainingLogs(payload.logs);
+    }
+    return payload as { status: "cancelled"; metrics?: NonNullable<GeneratedTrainMetrics>; logs?: string[]; error?: string };
   }
 
   async function runGeneratedTraining() {
@@ -261,20 +287,27 @@ export default function Home() {
   }
 
   function buildAblationQueue() {
-    const variants = createAblationVariants(project);
+    const variants = createAblationVariants(project, queuePreset);
     setAblationQueue(variants);
     setNotice({ tone: "good", text: `Queued ${variants.length} topology variants.` });
   }
 
   async function runAblationQueue() {
-    const preparedQueue = ablationQueue.length > 0 ? ablationQueue : createAblationVariants(project);
+    const preparedQueue = ablationQueue.length > 0 ? ablationQueue : createAblationVariants(project, queuePreset);
     setAblationQueue(preparedQueue);
+    queueCancelRef.current = false;
     setQueueBusy(true);
     setTrainingBusy(true);
     setTrainingLogs([]);
     setNotice({ tone: "good", text: "Ablation queue started." });
     try {
       for (const item of preparedQueue) {
+        if (queueCancelRef.current) {
+          break;
+        }
+        if (item.status === "complete") {
+          continue;
+        }
         setAblationQueue((current) => updateQueueItem(current, item.id, { status: "running", error: undefined }));
         const started = await startGeneratedRun(item.project);
         setAblationQueue((current) => updateQueueItem(current, item.id, { runId: started.runId }));
@@ -287,8 +320,11 @@ export default function Home() {
           }),
         );
         void loadGeneratedRuns();
+        if (finished.status === "cancelled") {
+          break;
+        }
       }
-      setNotice({ tone: "good", text: "Ablation queue completed." });
+      setNotice({ tone: queueCancelRef.current ? "bad" : "good", text: queueCancelRef.current ? "Ablation queue stopped." : "Ablation queue completed." });
     } catch (error) {
       setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Ablation queue failed." });
     } finally {
@@ -297,6 +333,55 @@ export default function Home() {
       void loadGeneratedMetrics();
       void loadGeneratedRuns();
     }
+  }
+
+  async function stopQueueOrRun() {
+    queueCancelRef.current = true;
+    try {
+      if (activeRunId) {
+        await cancelGeneratedRun(activeRunId);
+      }
+      setAblationQueue((current) =>
+        current.map((item) => (item.status === "complete" ? item : { ...item, status: item.status === "running" ? "cancelled" : item.status })),
+      );
+      setNotice({ tone: "bad", text: activeRunId ? "Current generated run cancelled." : "Queue stop requested." });
+    } catch (error) {
+      setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Could not cancel the current run." });
+    } finally {
+      setQueueBusy(false);
+      setTrainingBusy(false);
+      void loadGeneratedMetrics();
+      void loadGeneratedRuns();
+    }
+  }
+
+  function clearQueuedVariants() {
+    setAblationQueue((current) => current.filter((item) => item.status === "complete"));
+    setNotice({ tone: "good", text: "Queued variants cleared. Completed results kept." });
+  }
+
+  function loadQueueVariant(item: AblationQueueItem) {
+    commitProject(item.project);
+    const nextSelected = item.project.nodes.some((node) => node.id === selectedNodeId) ? selectedNodeId : item.project.nodes[0]?.id;
+    if (nextSelected) {
+      setSelectedNodeId(nextSelected);
+    }
+    setNotice({ tone: "good", text: `Loaded ${item.label} onto the canvas.` });
+  }
+
+  function exportQueueReport(format: "json" | "csv") {
+    const rows = buildQueueReportRows(ablationQueue);
+    if (rows.length === 0) {
+      setNotice({ tone: "bad", text: "No queue variants to export yet." });
+      return;
+    }
+    if (format === "json") {
+      downloadTextFile("mnist-ablation-report.json", JSON.stringify({ exportedAt: new Date().toISOString(), rows }, null, 2), "application/json");
+      setNotice({ tone: "good", text: "JSON comparison report exported." });
+      return;
+    }
+    downloadTextFile("mnist-ablation-report.csv", toCsv(rows), "text/csv");
+    setNotice({ tone: "good", text: "CSV comparison report exported." });
   }
 
   function refreshTrainingState() {
@@ -649,12 +734,18 @@ export default function Home() {
         currentTopologyId={currentTopologyId}
         ablationQueue={ablationQueue}
         queueBusy={queueBusy}
+        queuePreset={queuePreset}
         settings={trainSettings}
         onSettingsChange={setTrainSettings}
+        onQueuePresetChange={setQueuePreset}
         onRefresh={refreshTrainingState}
         onRun={runGeneratedTraining}
         onBuildQueue={buildAblationQueue}
         onRunQueue={runAblationQueue}
+        onStopQueue={stopQueueOrRun}
+        onClearQueue={clearQueuedVariants}
+        onExportReport={exportQueueReport}
+        onLoadVariant={loadQueueVariant}
         onSelectRun={setSelectedRunId}
       />
 
@@ -895,12 +986,18 @@ function GeneratedTrainingPanel({
   currentTopologyId,
   ablationQueue,
   queueBusy,
+  queuePreset,
   settings,
   onSettingsChange,
+  onQueuePresetChange,
   onRefresh,
   onRun,
   onBuildQueue,
   onRunQueue,
+  onStopQueue,
+  onClearQueue,
+  onExportReport,
+  onLoadVariant,
   onSelectRun,
 }: {
   metrics: GeneratedTrainMetrics;
@@ -914,12 +1011,18 @@ function GeneratedTrainingPanel({
   currentTopologyId: string;
   ablationQueue: AblationQueueItem[];
   queueBusy: boolean;
+  queuePreset: QueuePreset;
   settings: TrainSettings;
   onSettingsChange: (settings: TrainSettings) => void;
+  onQueuePresetChange: (preset: QueuePreset) => void;
   onRefresh: () => void;
   onRun: () => void;
   onBuildQueue: () => void;
   onRunQueue: () => void;
+  onStopQueue: () => void;
+  onClearQueue: () => void;
+  onExportReport: (format: "json" | "csv") => void;
+  onLoadVariant: (item: AblationQueueItem) => void;
   onSelectRun: (runId: string | null) => void;
 }) {
   function updateSetting<K extends keyof TrainSettings>(key: K, value: TrainSettings[K]) {
@@ -957,6 +1060,10 @@ function GeneratedTrainingPanel({
           <button type="button" onClick={onRunQueue} disabled={trainingBusy || queueBusy}>
             {queueBusy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
             Run queue
+          </button>
+          <button type="button" onClick={onStopQueue} disabled={!trainingBusy && !queueBusy}>
+            <XCircle size={16} />
+            Stop
           </button>
           <button type="button" onClick={onRefresh} disabled={metricsBusy || trainingBusy}>
             <RefreshCw size={16} />
@@ -1027,6 +1134,15 @@ function GeneratedTrainingPanel({
         </label>
       </div>
       <p className="trainingNote">Default settings are tuned for a quick real-MNIST compiler check.</p>
+      <QueueToolbar
+        preset={queuePreset}
+        queueLength={ablationQueue.length}
+        queueBusy={queueBusy}
+        onPresetChange={onQueuePresetChange}
+        onBuildQueue={onBuildQueue}
+        onClearQueue={onClearQueue}
+        onExportReport={onExportReport}
+      />
       {displayedMetrics ? (
         <div className="trainingMetricGrid">
           <span>
@@ -1052,7 +1168,7 @@ function GeneratedTrainingPanel({
         <div className="emptyTraining">No generated training metrics yet.</div>
       )}
       <MetricCharts runs={chartRuns} batchLosses={batchLosses} />
-      <AblationQueuePanel queue={ablationQueue} currentTopologyId={currentTopologyId} />
+      <AblationQueuePanel queue={ablationQueue} currentTopologyId={currentTopologyId} onLoadVariant={onLoadVariant} />
       <div className="trainingRuntimeGrid">
         <div className="trainingLogPanel">
           <div className="subPanelHeader">
@@ -1101,6 +1217,54 @@ function GeneratedTrainingPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+function QueueToolbar({
+  preset,
+  queueLength,
+  queueBusy,
+  onPresetChange,
+  onBuildQueue,
+  onClearQueue,
+  onExportReport,
+}: {
+  preset: QueuePreset;
+  queueLength: number;
+  queueBusy: boolean;
+  onPresetChange: (preset: QueuePreset) => void;
+  onBuildQueue: () => void;
+  onClearQueue: () => void;
+  onExportReport: (format: "json" | "csv") => void;
+}) {
+  return (
+    <div className="queueToolbar">
+      <label>
+        <span>Preset</span>
+        <select value={preset} onChange={(event) => onPresetChange(event.target.value as QueuePreset)} disabled={queueBusy}>
+          <option value="width">Width sweep</option>
+          <option value="dropPath">Drop-path sweep</option>
+          <option value="pooling">Pooling mode sweep</option>
+          <option value="se">SE on/off sweep</option>
+        </select>
+      </label>
+      <button type="button" onClick={onBuildQueue} disabled={queueBusy}>
+        <ListChecks size={15} />
+        Build
+      </button>
+      <button type="button" onClick={onClearQueue} disabled={queueBusy || queueLength === 0}>
+        <Trash2 size={15} />
+        Clear queued
+      </button>
+      <button type="button" onClick={() => onExportReport("json")} disabled={queueLength === 0}>
+        <Download size={15} />
+        JSON
+      </button>
+      <button type="button" onClick={() => onExportReport("csv")} disabled={queueLength === 0}>
+        <Download size={15} />
+        CSV
+      </button>
+    </div>
   );
 }
 
@@ -1174,7 +1338,15 @@ function TinyLineChart({
   );
 }
 
-function AblationQueuePanel({ queue, currentTopologyId }: { queue: AblationQueueItem[]; currentTopologyId: string }) {
+function AblationQueuePanel({
+  queue,
+  currentTopologyId,
+  onLoadVariant,
+}: {
+  queue: AblationQueueItem[];
+  currentTopologyId: string;
+  onLoadVariant: (item: AblationQueueItem) => void;
+}) {
   if (queue.length === 0) {
     return null;
   }
@@ -1186,13 +1358,13 @@ function AblationQueuePanel({ queue, currentTopologyId }: { queue: AblationQueue
       </div>
       <div className="ablationQueueGrid">
         {queue.map((item) => (
-          <div className={`ablationQueueItem ${item.status}`} key={item.id}>
+          <button className={`ablationQueueItem ${item.status}`} key={item.id} type="button" onClick={() => onLoadVariant(item)}>
             <span>{item.label}</span>
             <strong>{formatMaybePercent(item.metrics?.test_accuracy)}</strong>
             <small>{item.note}</small>
             <small>train {formatMaybeNumber(item.metrics?.train_loss)} / test {formatMaybeNumber(item.metrics?.test_loss)}</small>
             <small>{item.topologyId === currentTopologyId ? "current" : item.topologyId} / {item.status}</small>
-          </div>
+          </button>
         ))}
       </div>
     </div>
@@ -1231,51 +1403,88 @@ function GeneratedFilesPanel({
   );
 }
 
-function createAblationVariants(project: TopologyProject): AblationQueueItem[] {
-  const variants = [
-    {
-      id: "current",
-      label: "Current",
-      note: "Canvas topology",
-      project,
-    },
-    {
-      id: "wider-tail",
-      label: "Wider tail",
-      note: "Block 5 width +32",
-      project: mutateProject(project, "Wider Tail", (node) =>
-        node.id === "block5" && typeof node.parameters.out_channels === "number"
-          ? { ...node, parameters: { ...node.parameters, out_channels: node.parameters.out_channels + 32 } }
-          : node,
-      ),
-    },
-    {
-      id: "lighter-tail",
-      label: "Lighter tail",
-      note: "Blocks 4-5 width -16",
-      project: mutateProject(project, "Lighter Tail", (node) =>
-        (node.id === "block4" || node.id === "block5") && typeof node.parameters.out_channels === "number"
-          ? { ...node, parameters: { ...node.parameters, out_channels: Math.max(16, node.parameters.out_channels - 16) } }
-          : node,
-      ),
-    },
-    {
-      id: "low-drop",
-      label: "Low drop",
-      note: "Drop path halved",
-      project: mutateProject(project, "Low Drop", (node) =>
-        node.kind === "multi_branch_residual" && typeof node.parameters.drop_path === "number"
-          ? { ...node, parameters: { ...node.parameters, drop_path: Number((node.parameters.drop_path / 2).toFixed(3)) } }
-          : node,
-      ),
-    },
-  ];
-
+function createAblationVariants(project: TopologyProject, preset: QueuePreset): AblationQueueItem[] {
+  const variants = [baseVariant(project), ...presetVariants(project, preset)];
   return variants.map((variant) => ({
     ...variant,
     topologyId: topologyVersionId(variant.project),
     status: "queued" as const,
   }));
+}
+
+function baseVariant(project: TopologyProject) {
+  return {
+    id: "current",
+    label: "Current",
+    note: "Canvas topology",
+    project,
+  };
+}
+
+function presetVariants(project: TopologyProject, preset: QueuePreset) {
+  if (preset === "width") {
+    const block5 = project.nodes.find((node) => node.id === "block5");
+    const baseWidth = typeof block5?.parameters.out_channels === "number" ? block5.parameters.out_channels : 160;
+    return [-32, -16, 16, 32].map((delta) => {
+      const width = Math.max(16, nearestMultiple(baseWidth + delta, 4));
+      return {
+        id: `width-${width}`,
+        label: `${width} ch`,
+        note: `Block 5 width ${delta > 0 ? "+" : ""}${delta}`,
+        project: mutateProject(project, `Width ${width}`, (node) =>
+          node.id === "block5" ? { ...node, parameters: { ...node.parameters, out_channels: width } } : node,
+        ),
+      };
+    });
+  }
+
+  if (preset === "dropPath") {
+    return [
+      { id: "drop-0", label: "No drop", factor: 0 },
+      { id: "drop-half", label: "Half drop", factor: 0.5 },
+      { id: "drop-base", label: "Base drop", factor: 1 },
+      { id: "drop-high", label: "High drop", factor: 1.5 },
+    ].map((item) => ({
+      id: item.id,
+      label: item.label,
+      note: item.factor === 0 ? "Drop path disabled" : `Drop path x${item.factor}`,
+      project: mutateProject(project, item.label, (node) =>
+        node.kind === "multi_branch_residual" && typeof node.parameters.drop_path === "number"
+          ? { ...node, parameters: { ...node.parameters, drop_path: Number((node.parameters.drop_path * item.factor).toFixed(3)) } }
+          : node,
+      ),
+    }));
+  }
+
+  if (preset === "pooling") {
+    return [
+      { id: "pool-gap", label: "GAP", mode: "gap" },
+      { id: "pool-gap-gmp", label: "GAP + GMP", mode: "gap_gmp" },
+    ].map((item) => ({
+      id: item.id,
+      label: item.label,
+      note: "Pooling mode",
+      project: mutateProject(project, item.label, (node) =>
+        node.kind === "pooling_fusion" ? { ...node, parameters: { ...node.parameters, mode: item.mode } } : node,
+      ),
+    }));
+  }
+
+  return [
+    { id: "se-off", label: "SE off", useSe: false },
+    { id: "se-on", label: "SE on", useSe: true },
+  ].map((item) => ({
+    id: item.id,
+    label: item.label,
+    note: "Squeeze-excite toggle",
+    project: mutateProject(project, item.label, (node) =>
+      node.kind === "multi_branch_residual" ? { ...node, parameters: { ...node.parameters, use_se: item.useSe } } : node,
+    ),
+  }));
+}
+
+function nearestMultiple(value: number, multiple: number) {
+  return Math.max(multiple, Math.round(value / multiple) * multiple);
 }
 
 function mutateProject(project: TopologyProject, suffix: string, mutateNode: (node: TopologyNode) => TopologyNode): TopologyProject {
@@ -1323,6 +1532,61 @@ function buildChartRuns(runHistory: GeneratedRunSummary[], currentMetrics: Gener
     });
   }
   return completed;
+}
+
+function buildQueueReportRows(queue: AblationQueueItem[]) {
+  return queue.map((item) => {
+    const resolution = resolveTopology(item.project);
+    return {
+      label: item.label,
+      note: item.note,
+      topologyId: item.topologyId,
+      status: item.status,
+      runId: item.runId ?? "",
+      runPath: item.runId ? `runs/${item.runId}` : "",
+      accuracy: item.metrics?.test_accuracy ?? null,
+      trainLoss: item.metrics?.train_loss ?? null,
+      testLoss: item.metrics?.test_loss ?? null,
+      finalBatchLoss: item.metrics?.final_batch_loss ?? null,
+      parameters: resolution.totalParameters,
+      flops: resolution.totalFlops,
+      projectName: item.project.name,
+    };
+  });
+}
+
+function toCsv(rows: ReturnType<typeof buildQueueReportRows>) {
+  const headers = [
+    "label",
+    "note",
+    "topologyId",
+    "status",
+    "runId",
+    "runPath",
+    "accuracy",
+    "trainLoss",
+    "testLoss",
+    "finalBatchLoss",
+    "parameters",
+    "flops",
+    "projectName",
+  ];
+  return [headers.join(","), ...rows.map((row) => headers.map((header) => csvCell(row[header as keyof typeof row])).join(","))].join("\n");
+}
+
+function csvCell(value: string | number | null) {
+  const text = value === null ? "" : String(value);
+  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function downloadTextFile(filename: string, content: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function parseBatchLosses(logs: string[]) {

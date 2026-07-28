@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -23,13 +23,14 @@ type TrainRequest = {
 type TrainJob = {
   runId: string;
   topologyId: string;
-  status: "running" | "complete" | "failed";
+  status: "running" | "complete" | "failed" | "cancelled";
   runDir: string;
   logPath: string;
   startedAt: string;
   finishedAt?: string;
   logs: string[];
   metrics?: unknown;
+  child?: ChildProcessWithoutNullStreams;
   error?: string;
 };
 
@@ -178,6 +179,7 @@ export async function POST(request: Request) {
     cwd: projectPath(),
     windowsHide: true,
   });
+  job.child = child;
 
   child.stdout.on("data", (chunk: Buffer) => {
     appendLog(job, chunk.toString());
@@ -195,10 +197,44 @@ export async function POST(request: Request) {
   return NextResponse.json({ runId, topologyId, status: "running", metrics: initialMetrics, logs: job.logs }, { status: 202 });
 }
 
+export async function DELETE(request: Request) {
+  const url = new URL(request.url);
+  const runId = url.searchParams.get("runId") ?? "";
+  if (!runId) {
+    return NextResponse.json({ error: "runId is required." }, { status: 400 });
+  }
+
+  const job = jobs.get(runId);
+  if (!job) {
+    return NextResponse.json({ error: "Run not found or no longer active." }, { status: 404 });
+  }
+  if (job.status !== "running") {
+    return NextResponse.json({ runId, status: job.status, metrics: job.metrics ?? null, logs: job.logs });
+  }
+
+  job.status = "cancelled";
+  job.finishedAt = new Date().toISOString();
+  job.error = "Cancelled by user.";
+  appendLog(job, job.error);
+  job.child?.kill();
+
+  const metrics = ((await readJson(path.join(job.runDir, "metrics.json"))) as Record<string, unknown> | null) ?? {};
+  const cancelledMetrics = { ...metrics, status: "cancelled", error: job.error, updated_at: job.finishedAt };
+  await writeFile(path.join(job.runDir, "metrics.json"), JSON.stringify(cancelledMetrics, null, 2), "utf8");
+  await writeFile(projectPath("generated", "train_metrics.json"), JSON.stringify(cancelledMetrics, null, 2), "utf8");
+  job.metrics = cancelledMetrics;
+
+  return NextResponse.json({ runId, status: "cancelled", metrics: cancelledMetrics, logs: job.logs, error: job.error });
+}
+
 async function finishJob(job: TrainJob, fallbackStatus: TrainJob["status"], error?: string) {
+  if (job.status === "cancelled") {
+    return;
+  }
   const metrics = (await readJson(path.join(job.runDir, "metrics.json"))) as Record<string, unknown> | null;
   job.metrics = metrics ?? job.metrics;
-  job.status = metrics?.status === "complete" || metrics?.status === "failed" ? metrics.status : fallbackStatus;
+  job.status =
+    metrics?.status === "complete" || metrics?.status === "failed" || metrics?.status === "cancelled" ? metrics.status : fallbackStatus;
   job.finishedAt = new Date().toISOString();
   job.error = error;
   if (error) {

@@ -1021,6 +1021,53 @@ h1 {
   gap: 8px;
 }
 
+.queueToolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(4, auto);
+  gap: 8px;
+  align-items: end;
+}
+
+.queueToolbar label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.queueToolbar select,
+.queueToolbar button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  color: var(--blue);
+  font-weight: 900;
+}
+
+.queueToolbar select {
+  min-width: 0;
+  padding: 0 9px;
+  color: var(--ink);
+}
+
+.queueToolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.queueToolbar button:disabled,
+.queueToolbar select:disabled {
+  color: #9aa6b5;
+  cursor: wait;
+}
+
 .metricChartGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1114,6 +1161,8 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #fbfcfd;
+  cursor: pointer;
+  text-align: left;
 }
 
 .ablationQueueItem span,
@@ -1146,7 +1195,13 @@ h1 {
   background: #fff6f6;
 }
 
+.ablationQueueItem.cancelled {
+  border-color: rgba(168, 100, 19, 0.32);
+  background: #fff8e8;
+}
+
 @media (max-width: 980px) {
+  .queueToolbar,
   .metricChartGrid,
   .ablationQueueGrid {
     grid-template-columns: 1fr;

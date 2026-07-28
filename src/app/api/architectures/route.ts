@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { NextResponse } from "next/server";
 
+import { predefinedArchitectures } from "@/lib/predefinedArchitectures";
 import { enhancedFiveBlockTopology, parseTopologyProject, resolveTopology, type TopologyProject } from "@/lib/topology";
 import { topologyVersionId } from "@/lib/topologyVersion";
 
@@ -32,6 +33,7 @@ type ArchitectureRecord = {
   createdAt: string;
   updatedAt: string;
   archived: boolean;
+  locked: boolean;
   project: TopologyProject;
 };
 
@@ -72,6 +74,7 @@ export async function POST(request: Request) {
     createdAt: now,
     updatedAt: now,
     archived: false,
+    locked: false,
     project: { ...parsed.project, name },
   });
 
@@ -88,6 +91,9 @@ export async function PATCH(request: Request) {
   const existing = await readArchitecture(id);
   if (!existing) {
     return NextResponse.json({ error: "Architecture not found." }, { status: 404 });
+  }
+  if (existing.locked) {
+    return NextResponse.json({ error: "Built-in architectures cannot be edited." }, { status: 400 });
   }
 
   const project = payload.project ? parseTopologyProject(payload.project).project : existing.project;
@@ -118,6 +124,9 @@ export async function DELETE(request: Request) {
   if (!existing) {
     return NextResponse.json({ error: "Architecture not found." }, { status: 404 });
   }
+  if (existing.locked) {
+    return NextResponse.json({ error: "Built-in architectures cannot be archived." }, { status: 400 });
+  }
   const archived = { ...existing, archived: true, updatedAt: new Date().toISOString() };
   await writeArchitecture(archived);
   return NextResponse.json({ architecture: archived });
@@ -141,7 +150,8 @@ async function listArchitectures(includeArchived: boolean) {
     .filter((architecture): architecture is ArchitectureRecord => Boolean(architecture))
     .filter((architecture) => includeArchived || !architecture.archived);
 
-  return [baselineRecord(), ...saved].sort((left, right) => Number(left.archived) - Number(right.archived) || right.updatedAt.localeCompare(left.updatedAt));
+  const savedSorted = saved.sort((left, right) => Number(left.archived) - Number(right.archived) || right.updatedAt.localeCompare(left.updatedAt));
+  return [baselineRecord(), ...predefinedRecords(), ...savedSorted];
 }
 
 function baselineRecord() {
@@ -154,8 +164,26 @@ function baselineRecord() {
     createdAt: "builtin",
     updatedAt: "builtin",
     archived: false,
+    locked: true,
     project: enhancedFiveBlockTopology,
   });
+}
+
+function predefinedRecords() {
+  return predefinedArchitectures.map((architecture) =>
+    buildArchitectureRecord({
+      id: architecture.id,
+      name: architecture.name,
+      notes: architecture.notes,
+      tags: architecture.tags,
+      parentId: architecture.parentId,
+      createdAt: "builtin",
+      updatedAt: "builtin",
+      archived: false,
+      locked: true,
+      project: architecture.project,
+    }),
+  );
 }
 
 async function readArchitecture(id: string) {
@@ -196,6 +224,7 @@ function normalizeArchitecture(value: Record<string, unknown>): ArchitectureReco
     createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString(),
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString(),
     archived: value.archived === true,
+    locked: value.locked === true,
     project: parsed.project,
   });
 }

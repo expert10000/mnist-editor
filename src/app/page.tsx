@@ -194,6 +194,7 @@ type ArchitectureSummary = {
   createdAt: string;
   updatedAt: string;
   archived: boolean;
+  locked: boolean;
   project: TopologyProject;
 };
 type AblationQueueItem = {
@@ -597,12 +598,12 @@ export default function Home() {
   }
 
   async function archiveArchitecture() {
-    if (selectedArchitectureId === "baseline-fiveblock") {
-      setNotice({ tone: "bad", text: "The built-in baseline cannot be archived." });
-      return;
-    }
     const current = architectures.find((item) => item.id === selectedArchitectureId);
     if (!current) {
+      return;
+    }
+    if (current.locked) {
+      setNotice({ tone: "bad", text: "Built-in architectures cannot be archived. Duplicate it first if you want your own editable copy." });
       return;
     }
     const confirmed = window.confirm(`Archive ${current.name}?`);
@@ -1234,7 +1235,7 @@ export default function Home() {
           <button
             type="button"
             onClick={() => void archiveArchitecture()}
-            disabled={architectureBusy || selectedArchitectureId === "baseline-fiveblock"}
+            disabled={architectureBusy || Boolean(architectures.find((architecture) => architecture.id === selectedArchitectureId)?.locked)}
             title="Archive selected saved architecture"
           >
             <Trash2 size={16} />
@@ -1609,7 +1610,7 @@ function ArchitectureLibraryPanel({
             <Plus size={16} />
             Duplicate
           </button>
-          <button type="button" onClick={onArchive} disabled={busy || selectedId === "baseline-fiveblock"}>
+          <button type="button" onClick={onArchive} disabled={busy || Boolean(selectedArchitecture?.locked)}>
             <Trash2 size={16} />
             Archive
           </button>
@@ -1652,6 +1653,7 @@ function ArchitectureLibraryPanel({
                 {architecture.tags.slice(0, 3).map((tag) => (
                   <small key={tag}>{tag}</small>
                 ))}
+                {architecture.locked ? <small>built-in</small> : <small>saved</small>}
               </span>
               <span className="architectureStats">
                 <span>

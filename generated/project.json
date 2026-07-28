@@ -10,8 +10,8 @@
   "nodes": [
     {
       "id": "input",
-      "name": "MNIST image",
       "kind": "input",
+      "name": "MNIST image",
       "description": "Single-channel 28 x 28 digit image.",
       "position": {
         "x": 60,
@@ -25,8 +25,8 @@
     },
     {
       "id": "stem",
-      "name": "Stem",
       "kind": "conv_bn_gelu",
+      "name": "Stem",
       "description": "3 x 3 convolution with batch norm and GELU.",
       "position": {
         "x": 260,
@@ -41,8 +41,8 @@
     },
     {
       "id": "block1",
-      "name": "Block 1",
       "kind": "multi_branch_residual",
+      "name": "Block 1",
       "description": "Four-branch residual block.",
       "position": {
         "x": 460,
@@ -59,8 +59,8 @@
     },
     {
       "id": "block2",
-      "name": "Block 2",
       "kind": "multi_branch_residual",
+      "name": "Block 2",
       "description": "Downsampling four-branch residual block.",
       "position": {
         "x": 660,
@@ -77,8 +77,8 @@
     },
     {
       "id": "block3",
-      "name": "Block 3",
       "kind": "multi_branch_residual",
+      "name": "Block 3",
       "description": "SE-enabled block with an auxiliary classifier output.",
       "position": {
         "x": 860,
@@ -95,8 +95,8 @@
     },
     {
       "id": "auxiliary_head",
-      "name": "Auxiliary head",
       "kind": "auxiliary_classifier",
+      "name": "Auxiliary head",
       "description": "Auxiliary classifier attached to Block 3.",
       "position": {
         "x": 860,
@@ -108,8 +108,8 @@
     },
     {
       "id": "block4",
-      "name": "Block 4",
       "kind": "multi_branch_residual",
+      "name": "Block 4",
       "description": "Second downsampling SE residual block.",
       "position": {
         "x": 1060,
@@ -126,8 +126,8 @@
     },
     {
       "id": "block5",
-      "name": "Block 5",
       "kind": "multi_branch_residual",
+      "name": "Block 5",
       "description": "Final SE residual block before pooling.",
       "position": {
         "x": 1260,
@@ -144,8 +144,8 @@
     },
     {
       "id": "pooling",
-      "name": "GAP + GMP",
       "kind": "pooling_fusion",
+      "name": "GAP + GMP",
       "description": "Global average and max pooling concatenated into one vector.",
       "position": {
         "x": 1460,
@@ -157,8 +157,8 @@
     },
     {
       "id": "feature_head",
-      "name": "Feature head",
       "kind": "feature_head",
+      "name": "Feature head",
       "description": "Projection to a reusable ensemble embedding.",
       "position": {
         "x": 1660,
@@ -172,8 +172,8 @@
     },
     {
       "id": "classifier",
-      "name": "Classifier",
       "kind": "classifier",
+      "name": "Classifier",
       "description": "Final ten-class digit classifier.",
       "position": {
         "x": 1860,

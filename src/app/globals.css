@@ -244,6 +244,24 @@ h1 {
   background: #fff8e8;
 }
 
+.trainingProgressBlock {
+  display: grid;
+  gap: 6px;
+}
+
+.trainingProgressMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.trainingProgressMeta strong {
+  color: var(--ink);
+}
+
 .trainingProgress {
   height: 8px;
   overflow: hidden;
@@ -303,7 +321,7 @@ h1 {
 
 .trainingMetricGrid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 

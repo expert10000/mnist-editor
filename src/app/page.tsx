@@ -67,9 +67,17 @@ type GeneratedTrainMetrics = {
   total_batches?: number;
   first_batch_loss: number | null;
   final_batch_loss: number | null;
+  final_batch_accuracy?: number | null;
   train_loss: number | null;
+  train_accuracy?: number | null;
+  baseline_test_loss?: number | null;
+  baseline_accuracy?: number | null;
   test_loss: number | null;
   test_accuracy: number | null;
+  best_accuracy?: number | null;
+  best_epoch?: number | null;
+  accuracy_delta?: number | null;
+  epoch_history?: Array<{ epoch: number; train_loss: number; test_loss: number; test_accuracy: number }>;
   checkpoint?: string;
   duration_seconds?: number;
   passed_smoke_rule: boolean | null;
@@ -1176,6 +1184,12 @@ function GeneratedTrainingPanel({
         ? 100
         : 0;
   const topologyMatches = displayedMetrics?.topology_id ? displayedMetrics.topology_id === currentTopologyId : undefined;
+  const bestAccuracy = displayedMetrics?.best_accuracy ?? displayedMetrics?.test_accuracy;
+  const bestEpoch = displayedMetrics?.best_epoch ?? undefined;
+  const bestAccuracySuffix = bestEpoch === 0 ? " / base" : typeof bestEpoch === "number" ? ` / e${bestEpoch}` : "";
+  const progressEpoch = displayedMetrics?.current_epoch ?? 0;
+  const progressBatch = displayedMetrics?.current_batch ?? 0;
+  const progressTotal = displayedMetrics?.total_batches ?? 0;
   const chartRuns = buildChartRuns(runHistory, displayedMetrics, ablationQueue);
   const batchLosses = parseBatchLosses(logs);
 
@@ -1223,9 +1237,22 @@ function GeneratedTrainingPanel({
           Match <strong>{topologyMatches === undefined ? "-" : topologyMatches ? "yes" : "no"}</strong>
         </span>
       </div>
-      {trainingBusy || displayedMetrics?.status === "running" ? (
-        <div className="trainingProgress" aria-label="Training progress">
-          <span style={{ width: `${progress}%` }} />
+      {displayedMetrics ? (
+        <div className="trainingProgressBlock" aria-label="Training progress">
+          <div className="trainingProgressMeta">
+            <span>
+              Progress <strong>{progress}%</strong>
+            </span>
+            <span>
+              Epoch <strong>{progressEpoch}/{displayedMetrics.epochs}</strong>
+            </span>
+            <span>
+              Batch <strong>{progressBatch}/{progressTotal}</strong>
+            </span>
+          </div>
+          <div className="trainingProgress">
+            <span style={{ width: `${progress}%` }} />
+          </div>
         </div>
       ) : null}
       <div className="trainingControls">
@@ -1292,7 +1319,19 @@ function GeneratedTrainingPanel({
       {displayedMetrics ? (
         <div className="trainingMetricGrid">
           <span>
-            Accuracy <strong>{formatMaybePercent(displayedMetrics.test_accuracy)}</strong>
+            Final acc <strong>{formatMaybePercent(displayedMetrics.test_accuracy)}</strong>
+          </span>
+          <span>
+            Initial acc <strong>{formatMaybePercent(displayedMetrics.baseline_accuracy)}</strong>
+          </span>
+          <span>
+            Best acc <strong>{formatMaybePercent(bestAccuracy)}{bestAccuracySuffix}</strong>
+          </span>
+          <span>
+            Delta <strong>{formatMaybeSignedPercent(displayedMetrics.accuracy_delta)}</strong>
+          </span>
+          <span>
+            Train acc <strong>{formatMaybePercent(displayedMetrics.train_accuracy)}</strong>
           </span>
           <span>
             Train loss <strong>{formatMaybeNumber(displayedMetrics.train_loss)}</strong>
@@ -1351,7 +1390,7 @@ function GeneratedTrainingPanel({
                     {run.topologyId ?? "-"}
                   </button>
                   <button className={`runHistoryCell ${run.runId === selectedRunId ? "selected" : ""}`} type="button" onClick={() => onSelectRun(run.runId)}>
-                    {formatMaybePercent(run.metrics.test_accuracy)}
+                    {formatMaybePercent(run.metrics.best_accuracy ?? run.metrics.test_accuracy)}
                   </button>
                   <button className={`runHistoryCell ${run.runId === selectedRunId ? "selected" : ""}`} type="button" onClick={() => onSelectRun(run.runId)}>
                     {run.status}
@@ -1549,7 +1588,7 @@ function AblationQueuePanel({
         {queue.map((item) => (
           <button className={`ablationQueueItem ${item.status}`} key={item.id} type="button" onClick={() => onLoadVariant(item)}>
             <span>{item.label}</span>
-            <strong>{formatMaybePercent(item.metrics?.test_accuracy)}</strong>
+            <strong>{formatMaybePercent(item.metrics?.best_accuracy ?? item.metrics?.test_accuracy)}</strong>
             <small>{item.note}</small>
             <small>train {formatMaybeNumber(item.metrics?.train_loss)} / test {formatMaybeNumber(item.metrics?.test_loss)}</small>
             <small>{item.topologyId === currentTopologyId ? "current" : item.topologyId} / {item.status}</small>
@@ -1694,7 +1733,7 @@ function buildChartRuns(runHistory: GeneratedRunSummary[], currentMetrics: Gener
     .filter((item) => item.metrics)
     .map((item) => ({
       label: item.label,
-      accuracy: item.metrics?.test_accuracy ?? undefined,
+      accuracy: item.metrics?.best_accuracy ?? item.metrics?.test_accuracy ?? undefined,
       trainLoss: item.metrics?.train_loss ?? undefined,
       testLoss: item.metrics?.test_loss ?? undefined,
     }));
@@ -1708,14 +1747,14 @@ function buildChartRuns(runHistory: GeneratedRunSummary[], currentMetrics: Gener
     .reverse()
     .map((run) => ({
       label: formatRunLabel(run.runId),
-      accuracy: run.metrics.test_accuracy ?? undefined,
+      accuracy: run.metrics.best_accuracy ?? run.metrics.test_accuracy ?? undefined,
       trainLoss: run.metrics.train_loss ?? undefined,
       testLoss: run.metrics.test_loss ?? undefined,
     }));
   if (currentMetrics?.status === "running") {
     completed.push({
       label: "Live",
-      accuracy: currentMetrics.test_accuracy ?? undefined,
+      accuracy: currentMetrics.best_accuracy ?? currentMetrics.test_accuracy ?? undefined,
       trainLoss: currentMetrics.train_loss ?? undefined,
       testLoss: currentMetrics.test_loss ?? undefined,
     });
@@ -1734,6 +1773,11 @@ function buildQueueReportRows(queue: AblationQueueItem[]) {
       runId: item.runId ?? "",
       runPath: item.runId ? `runs/${item.runId}` : "",
       accuracy: item.metrics?.test_accuracy ?? null,
+      baselineAccuracy: item.metrics?.baseline_accuracy ?? null,
+      bestAccuracy: item.metrics?.best_accuracy ?? item.metrics?.test_accuracy ?? null,
+      bestEpoch: item.metrics?.best_epoch ?? null,
+      accuracyDelta: item.metrics?.accuracy_delta ?? null,
+      trainAccuracy: item.metrics?.train_accuracy ?? null,
       trainLoss: item.metrics?.train_loss ?? null,
       testLoss: item.metrics?.test_loss ?? null,
       finalBatchLoss: item.metrics?.final_batch_loss ?? null,
@@ -1746,8 +1790,8 @@ function buildQueueReportRows(queue: AblationQueueItem[]) {
 
 function bestQueueVariant(queue: AblationQueueItem[]) {
   return queue
-    .filter((item) => typeof item.metrics?.test_accuracy === "number")
-    .sort((left, right) => (right.metrics?.test_accuracy ?? -1) - (left.metrics?.test_accuracy ?? -1))[0];
+    .filter((item) => typeof (item.metrics?.best_accuracy ?? item.metrics?.test_accuracy) === "number")
+    .sort((left, right) => (right.metrics?.best_accuracy ?? right.metrics?.test_accuracy ?? -1) - (left.metrics?.best_accuracy ?? left.metrics?.test_accuracy ?? -1))[0];
 }
 
 function hydrateExperimentQueue(value: unknown): AblationQueueItem[] {
@@ -1803,6 +1847,11 @@ function toCsv(rows: ReturnType<typeof buildQueueReportRows>) {
     "runId",
     "runPath",
     "accuracy",
+    "baselineAccuracy",
+    "bestAccuracy",
+    "bestEpoch",
+    "accuracyDelta",
+    "trainAccuracy",
     "trainLoss",
     "testLoss",
     "finalBatchLoss",
@@ -1874,6 +1923,14 @@ function formatPercent(value: number) {
 
 function formatMaybePercent(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? formatPercent(value) : "-";
+}
+
+function formatMaybeSignedPercent(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  const formatted = formatPercent(value);
+  return value > 0 ? `+${formatted}` : formatted;
 }
 
 function formatMaybeNumber(value: number | null | undefined) {

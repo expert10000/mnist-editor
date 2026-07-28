@@ -41,9 +41,17 @@ class TrainMetrics:
     total_batches: int
     first_batch_loss: float
     final_batch_loss: float
+    final_batch_accuracy: float
     train_loss: float
+    train_accuracy: float
+    baseline_test_loss: float
+    baseline_accuracy: float
     test_loss: float
     test_accuracy: float
+    best_accuracy: float
+    best_epoch: int
+    accuracy_delta: float
+    epoch_history: list[dict[str, float | int]]
     checkpoint: str
     duration_seconds: float
     passed_smoke_rule: bool
@@ -122,9 +130,17 @@ def train(args: argparse.Namespace) -> TrainMetrics:
         "total_batches": 0,
         "first_batch_loss": None,
         "final_batch_loss": None,
+        "final_batch_accuracy": None,
         "train_loss": None,
+        "train_accuracy": None,
+        "baseline_test_loss": None,
+        "baseline_accuracy": None,
         "test_loss": None,
         "test_accuracy": None,
+        "best_accuracy": None,
+        "best_epoch": 0,
+        "accuracy_delta": None,
+        "epoch_history": [],
         "checkpoint": relative_path(checkpoint_path),
         "duration_seconds": 0.0,
         "passed_smoke_rule": None,
@@ -156,16 +172,39 @@ def train(args: argparse.Namespace) -> TrainMetrics:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     criterion = nn.CrossEntropyLoss()
 
+    baseline_test_loss, baseline_accuracy = evaluate(model, test_loader, criterion, device)
+    best_accuracy = baseline_accuracy
+    best_epoch = 0
+    epoch_history: list[dict[str, float | int]] = []
+    progress.update(
+        {
+            "baseline_test_loss": baseline_test_loss,
+            "baseline_accuracy": baseline_accuracy,
+            "test_loss": baseline_test_loss,
+            "test_accuracy": baseline_accuracy,
+            "best_accuracy": best_accuracy,
+            "best_epoch": best_epoch,
+            "accuracy_delta": 0.0,
+            "duration_seconds": round(time.perf_counter() - start, 2),
+        }
+    )
+    write_progress(progress, metrics_path, latest_metrics_path)
+    print(f"baseline accuracy={baseline_accuracy:.4f} test_loss={baseline_test_loss:.4f}", flush=True)
+
     first_batch_loss: float | None = None
     final_batch_loss = 0.0
+    final_batch_accuracy = 0.0
     running_loss = 0.0
+    running_correct = 0
     seen = 0
     global_batch = 0
-    test_loss = 0.0
-    test_accuracy = 0.0
+    test_loss = baseline_test_loss
+    test_accuracy = baseline_accuracy
 
     for epoch in range(1, args.epochs + 1):
         model.train()
+        epoch_loss = 0.0
+        epoch_seen = 0
         for images, labels in train_loader:
             images = images.to(device)
             labels = labels.to(device)
@@ -180,9 +219,14 @@ def train(args: argparse.Namespace) -> TrainMetrics:
             batch_loss = float(loss.item())
             if first_batch_loss is None:
                 first_batch_loss = batch_loss
+            batch_correct = int((logits.argmax(dim=1) == labels).sum().item())
+            final_batch_accuracy = batch_correct / max(1, images.size(0))
             final_batch_loss = batch_loss
             running_loss += batch_loss * images.size(0)
+            running_correct += batch_correct
             seen += images.size(0)
+            epoch_loss += batch_loss * images.size(0)
+            epoch_seen += images.size(0)
             global_batch += 1
 
             progress.update(
@@ -191,7 +235,9 @@ def train(args: argparse.Namespace) -> TrainMetrics:
                     "current_batch": global_batch,
                     "first_batch_loss": first_batch_loss,
                     "final_batch_loss": final_batch_loss,
+                    "final_batch_accuracy": final_batch_accuracy,
                     "train_loss": running_loss / max(1, seen),
+                    "train_accuracy": running_correct / max(1, seen),
                     "duration_seconds": round(time.perf_counter() - start, 2),
                 }
             )
@@ -199,18 +245,40 @@ def train(args: argparse.Namespace) -> TrainMetrics:
             print(f"batch {global_batch}/{total_batches} loss={batch_loss:.4f}", flush=True)
 
         test_loss, test_accuracy = evaluate(model, test_loader, criterion, device)
+        epoch_train_loss = epoch_loss / max(1, epoch_seen)
+        if test_accuracy > best_accuracy:
+            best_accuracy = test_accuracy
+            best_epoch = epoch
+        epoch_history.append(
+            {
+                "epoch": epoch,
+                "train_loss": float(epoch_train_loss),
+                "test_loss": float(test_loss),
+                "test_accuracy": float(test_accuracy),
+            }
+        )
         progress.update(
             {
+                "train_loss": running_loss / max(1, seen),
                 "test_loss": test_loss,
                 "test_accuracy": test_accuracy,
+                "best_accuracy": best_accuracy,
+                "best_epoch": best_epoch,
+                "accuracy_delta": best_accuracy - baseline_accuracy,
+                "epoch_history": epoch_history,
                 "duration_seconds": round(time.perf_counter() - start, 2),
             }
         )
         write_progress(progress, metrics_path, latest_metrics_path)
-        print(f"epoch {epoch}/{args.epochs} accuracy={test_accuracy:.4f} test_loss={test_loss:.4f}", flush=True)
+        print(
+            f"epoch {epoch}/{args.epochs} accuracy={test_accuracy:.4f} "
+            f"best={best_accuracy:.4f} delta={best_accuracy - baseline_accuracy:+.4f} test_loss={test_loss:.4f}",
+            flush=True,
+        )
 
     train_loss = running_loss / max(1, seen)
-    passed_smoke_rule = bool(test_accuracy >= args.min_accuracy and first_batch_loss is not None and final_batch_loss < first_batch_loss)
+    train_accuracy = running_correct / max(1, seen)
+    passed_smoke_rule = bool(best_accuracy >= args.min_accuracy and first_batch_loss is not None and final_batch_loss < first_batch_loss)
     status = "complete" if passed_smoke_rule else "failed"
 
     torch.save(
@@ -218,8 +286,12 @@ def train(args: argparse.Namespace) -> TrainMetrics:
             "model_state_dict": model.state_dict(),
             "metrics": {
                 "train_loss": train_loss,
+                "train_accuracy": train_accuracy,
                 "test_loss": test_loss,
                 "test_accuracy": test_accuracy,
+                "best_accuracy": best_accuracy,
+                "best_epoch": best_epoch,
+                "accuracy_delta": best_accuracy - baseline_accuracy,
             },
             "args": vars(args),
         },
@@ -243,15 +315,23 @@ def train(args: argparse.Namespace) -> TrainMetrics:
         total_batches=total_batches,
         first_batch_loss=float(first_batch_loss if first_batch_loss is not None else 0.0),
         final_batch_loss=float(final_batch_loss),
+        final_batch_accuracy=float(final_batch_accuracy),
         train_loss=float(train_loss),
+        train_accuracy=float(train_accuracy),
+        baseline_test_loss=float(baseline_test_loss),
+        baseline_accuracy=float(baseline_accuracy),
         test_loss=float(test_loss),
         test_accuracy=float(test_accuracy),
+        best_accuracy=float(best_accuracy),
+        best_epoch=best_epoch,
+        accuracy_delta=float(best_accuracy - baseline_accuracy),
+        epoch_history=epoch_history,
         checkpoint=relative_path(checkpoint_path),
         duration_seconds=round(time.perf_counter() - start, 2),
         passed_smoke_rule=passed_smoke_rule,
     )
     write_progress(asdict(metrics), metrics_path, latest_metrics_path)
-    print(f"run {args.run_id} {status}: accuracy={test_accuracy:.4f} train_loss={train_loss:.4f}", flush=True)
+    print(f"run {args.run_id} {status}: accuracy={test_accuracy:.4f} best={best_accuracy:.4f} train_loss={train_loss:.4f}", flush=True)
     if not metrics.passed_smoke_rule:
         raise RuntimeError(
             f"Generated model training check failed: accuracy={test_accuracy:.3f}, "

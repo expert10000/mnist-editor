@@ -12,6 +12,7 @@ type ExperimentPayload = {
   queue?: unknown;
   reportRows?: unknown;
   bestVariantId?: unknown;
+  winnerSummary?: unknown;
 };
 
 export async function GET(request: Request) {
@@ -69,6 +70,7 @@ export async function POST(request: Request) {
     createdAt: now,
     updatedAt: now,
     bestVariantId: typeof payload.bestVariantId === "string" ? payload.bestVariantId : "",
+    winnerSummary: isRecord(payload.winnerSummary) ? payload.winnerSummary : null,
     queue: Array.isArray(payload.queue) ? payload.queue : [],
     reportRows,
   };
@@ -79,7 +81,7 @@ export async function POST(request: Request) {
     session.createdAt = existing.createdAt;
   }
   await writeFile(path.join(directory, "session.json"), JSON.stringify(session, null, 2), "utf8");
-  await writeFile(path.join(directory, "report.json"), JSON.stringify({ exportedAt: now, rows: reportRows }, null, 2), "utf8");
+  await writeFile(path.join(directory, "report.json"), JSON.stringify({ exportedAt: now, winnerSummary: session.winnerSummary, rows: reportRows }, null, 2), "utf8");
   await writeFile(path.join(directory, "report.csv"), toCsv(reportRows), "utf8");
 
   return NextResponse.json({ experiment: session });
@@ -102,6 +104,15 @@ function toCsv(rows: unknown[]) {
     "runId",
     "runPath",
     "diagnosticsPath",
+    "topologyDiffSummary",
+    "changedFieldCount",
+    "addedNodes",
+    "removedNodes",
+    "addedEdges",
+    "removedEdges",
+    "paramsDelta",
+    "flopsDelta",
+    "winnerSummary",
     "seed",
     "learningRate",
     "accuracy",

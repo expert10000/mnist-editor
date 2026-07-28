@@ -105,6 +105,24 @@ type PredictionSample = {
   confidence?: number;
   pixels: number[];
 };
+type TopologyDiff = {
+  lines: string[];
+  summaryText: string;
+  paramsDelta: number;
+  flopsDelta: number;
+  changedFieldCount: number;
+  addedNodes: string[];
+  removedNodes: string[];
+  addedEdges: string[];
+  removedEdges: string[];
+  totalChanges: number;
+};
+type WinnerSummary = {
+  title: string;
+  detail: string;
+  diffSummary: string;
+  bestId: string;
+};
 type GeneratedRunSummary = {
   runId: string;
   topologyId?: string;
@@ -456,12 +474,13 @@ export default function Home() {
 
   function exportQueueReport(format: "json" | "csv") {
     const rows = buildQueueReportRows(ablationQueue);
+    const winnerSummary = buildWinnerSummary(ablationQueue);
     if (rows.length === 0) {
       setNotice({ tone: "bad", text: "No queue variants to export yet." });
       return;
     }
     if (format === "json") {
-      downloadTextFile("mnist-ablation-report.json", JSON.stringify({ exportedAt: new Date().toISOString(), rows }, null, 2), "application/json");
+      downloadTextFile("mnist-ablation-report.json", JSON.stringify({ exportedAt: new Date().toISOString(), winnerSummary, rows }, null, 2), "application/json");
       setNotice({ tone: "good", text: "JSON comparison report exported." });
       return;
     }
@@ -485,6 +504,7 @@ export default function Home() {
         preset: queuePreset,
         queue,
         bestVariantId: best?.id ?? "",
+        winnerSummary: buildWinnerSummary(queue),
         reportRows: buildQueueReportRows(queue),
       }),
     });
@@ -878,6 +898,7 @@ export default function Home() {
       </section>
 
       <GeneratedTrainingPanel
+        project={project}
         metrics={trainMetrics}
         metricsBusy={metricsBusy}
         trainingBusy={trainingBusy}
@@ -1138,6 +1159,7 @@ export default function Home() {
 }
 
 function GeneratedTrainingPanel({
+  project,
   metrics,
   metricsBusy,
   trainingBusy,
@@ -1171,6 +1193,7 @@ function GeneratedTrainingPanel({
   onLoadVariant,
   onSelectRun,
 }: {
+  project: TopologyProject;
   metrics: GeneratedTrainMetrics;
   metricsBusy: boolean;
   trainingBusy: boolean;
@@ -1230,6 +1253,9 @@ function GeneratedTrainingPanel({
   const chartRuns = buildChartRuns(runHistory, displayedMetrics, ablationQueue);
   const batchLosses = parseBatchLosses(logs);
   const improvementCheck = getImprovementCheck(displayedMetrics);
+  const topologyDiff = useMemo(() => buildTopologyDiff(enhancedFiveBlockTopology, project), [project]);
+  const currentResolution = useMemo(() => resolveTopology(project), [project]);
+  const winnerSummary = useMemo(() => buildWinnerSummary(ablationQueue), [ablationQueue]);
 
   return (
     <section className="trainingPanel">
@@ -1392,6 +1418,14 @@ function GeneratedTrainingPanel({
           </div>
         </div>
       ) : null}
+      <TraceabilityPanel
+        topologyId={currentTopologyId}
+        metrics={displayedMetrics}
+        settings={settings}
+        resolution={currentResolution}
+        diff={topologyDiff}
+        winnerSummary={winnerSummary}
+      />
       <QueueToolbar
         preset={queuePreset}
         experimentName={experimentName}
@@ -1589,6 +1623,82 @@ function QueueToolbar({
         <Download size={15} />
         CSV
       </button>
+    </div>
+  );
+}
+
+function TraceabilityPanel({
+  topologyId,
+  metrics,
+  settings,
+  resolution,
+  diff,
+  winnerSummary,
+}: {
+  topologyId: string;
+  metrics: GeneratedTrainMetrics;
+  settings: TrainSettings;
+  resolution: ReturnType<typeof resolveTopology>;
+  diff: TopologyDiff;
+  winnerSummary: WinnerSummary | null;
+}) {
+  return (
+    <div className="traceabilityPanel">
+      <div className="subPanelHeader">
+        <strong>Architecture traceability</strong>
+        <span>{diff.totalChanges === 0 ? "baseline topology" : `${diff.totalChanges} changes`}</span>
+      </div>
+      <div className="traceabilityGrid">
+        <div className="manifestCard">
+          <div className="diagnosticsTitle">
+            <strong>Run manifest</strong>
+            <span>current canvas</span>
+          </div>
+          <div className="manifestRows">
+            <span>
+              Topology <strong>{topologyId}</strong>
+            </span>
+            <span>
+              Preset <strong>{RUN_PRESET_LABELS[settings.preset]}</strong>
+            </span>
+            <span>
+              Seed / LR <strong>{metrics?.seed ?? settings.seed} / {formatLearningRate(metrics?.learning_rate ?? settings.learningRate)}</strong>
+            </span>
+            <span>
+              Params <strong>{formatCompactNumber(resolution.totalParameters)} ({formatDeltaCompact(diff.paramsDelta)})</strong>
+            </span>
+            <span>
+              FLOPs <strong>{formatCompactNumber(resolution.totalFlops)} ({formatDeltaCompact(diff.flopsDelta)})</strong>
+            </span>
+          </div>
+        </div>
+        <div className="diffCard">
+          <div className="diagnosticsTitle">
+            <strong>Diff against baseline</strong>
+            <span>{diff.summaryText}</span>
+          </div>
+          <ul className="diffList">
+            {(diff.lines.length > 0 ? diff.lines : ["No architecture changes from the default topology."]).slice(0, 8).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
+        <div className="winnerCard">
+          <div className="diagnosticsTitle">
+            <strong>Winner explanation</strong>
+            <span>{winnerSummary ? "queue result" : "waiting for queue"}</span>
+          </div>
+          {winnerSummary ? (
+            <div className="winnerSummary">
+              <strong>{winnerSummary.title}</strong>
+              <span>{winnerSummary.detail}</span>
+              <small>{winnerSummary.diffSummary}</small>
+            </div>
+          ) : (
+            <p className="traceabilityEmpty">Run a queue to compare variants against the current baseline.</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1940,6 +2050,90 @@ function updateQueueItem(queue: AblationQueueItem[], id: string, patch: Partial<
   return queue.map((item) => (item.id === id ? { ...item, ...patch } : item));
 }
 
+function buildTopologyDiff(base: TopologyProject, project: TopologyProject): TopologyDiff {
+  const baseResolution = resolveTopology(base);
+  const resolution = resolveTopology(project);
+  const baseNodes = new Map(base.nodes.map((node) => [node.id, node]));
+  const projectNodes = new Map(project.nodes.map((node) => [node.id, node]));
+  const lines: string[] = [];
+  let changedFieldCount = 0;
+
+  for (const node of project.nodes) {
+    const baseNode = baseNodes.get(node.id);
+    if (!baseNode) {
+      lines.push(`Added ${kindLabel(node.kind)} ${node.name}`);
+      continue;
+    }
+    if (baseNode.kind !== node.kind) {
+      lines.push(`${node.name} kind ${kindLabel(baseNode.kind)} -> ${kindLabel(node.kind)}`);
+      changedFieldCount += 1;
+    }
+    const keys = Array.from(new Set([...Object.keys(baseNode.parameters), ...Object.keys(node.parameters)])).sort();
+    for (const key of keys) {
+      const before = baseNode.parameters[key];
+      const after = node.parameters[key];
+      if (before !== after) {
+        changedFieldCount += 1;
+        lines.push(`${node.name} ${parameterLabel(key)} ${formatParamValue(before)} -> ${formatParamValue(after)}`);
+      }
+    }
+  }
+
+  for (const node of base.nodes) {
+    if (!projectNodes.has(node.id)) {
+      lines.push(`Removed ${kindLabel(node.kind)} ${node.name}`);
+    }
+  }
+
+  const baseEdgeSet = new Set(base.edges.map(edgeKey));
+  const projectEdgeSet = new Set(project.edges.map(edgeKey));
+  const addedEdges = project.edges.filter((edge) => !baseEdgeSet.has(edgeKey(edge))).map(edgeLabel);
+  const removedEdges = base.edges.filter((edge) => !projectEdgeSet.has(edgeKey(edge))).map(edgeLabel);
+  for (const edge of addedEdges) {
+    lines.push(`Added edge ${edge}`);
+  }
+  for (const edge of removedEdges) {
+    lines.push(`Removed edge ${edge}`);
+  }
+
+  const addedNodes = project.nodes.filter((node) => !baseNodes.has(node.id)).map((node) => node.name);
+  const removedNodes = base.nodes.filter((node) => !projectNodes.has(node.id)).map((node) => node.name);
+  const totalChanges = changedFieldCount + addedNodes.length + removedNodes.length + addedEdges.length + removedEdges.length;
+  return {
+    lines,
+    summaryText: summarizeDiffLines(lines),
+    paramsDelta: resolution.totalParameters - baseResolution.totalParameters,
+    flopsDelta: resolution.totalFlops - baseResolution.totalFlops,
+    changedFieldCount,
+    addedNodes,
+    removedNodes,
+    addedEdges,
+    removedEdges,
+    totalChanges,
+  };
+}
+
+function buildWinnerSummary(queue: AblationQueueItem[]): WinnerSummary | null {
+  const best = bestQueueVariant(queue);
+  if (!best?.metrics) {
+    return null;
+  }
+  const baseline = queue.find((item) => item.id === "current" && item.metrics) ?? queue.find((item) => item.metrics);
+  const bestAccuracy = best.metrics.best_accuracy ?? best.metrics.test_accuracy;
+  const baselineAccuracy = baseline?.metrics?.best_accuracy ?? baseline?.metrics?.test_accuracy;
+  const diff = buildTopologyDiff(enhancedFiveBlockTopology, best.project);
+  const accuracyText =
+    typeof bestAccuracy === "number" && typeof baselineAccuracy === "number"
+      ? `improved by ${formatMaybeSignedPercent(bestAccuracy - baselineAccuracy)} vs ${baseline?.label ?? "baseline"}`
+      : `reached ${formatMaybePercent(bestAccuracy)}`;
+  return {
+    bestId: best.id,
+    title: `${best.label} is best at ${formatMaybePercent(bestAccuracy)}`,
+    detail: `${accuracyText}; params ${formatDeltaCompact(diff.paramsDelta)}, FLOPs ${formatDeltaCompact(diff.flopsDelta)}.`,
+    diffSummary: diff.summaryText,
+  };
+}
+
 function buildChartRuns(runHistory: GeneratedRunSummary[], currentMetrics: GeneratedTrainMetrics, queue: AblationQueueItem[]) {
   const queueResults = queue
     .filter((item) => item.metrics)
@@ -1975,8 +2169,11 @@ function buildChartRuns(runHistory: GeneratedRunSummary[], currentMetrics: Gener
 }
 
 function buildQueueReportRows(queue: AblationQueueItem[]) {
+  const winnerSummary = buildWinnerSummary(queue);
   return queue.map((item) => {
     const resolution = resolveTopology(item.project);
+    const baselineResolution = resolveTopology(enhancedFiveBlockTopology);
+    const topologyDiff = buildTopologyDiff(enhancedFiveBlockTopology, item.project);
     const weakestClass = weakestPerClass(item.metrics?.diagnostics);
     const topConfusion = strongestConfusion(item.metrics?.diagnostics);
     return {
@@ -1987,6 +2184,15 @@ function buildQueueReportRows(queue: AblationQueueItem[]) {
       runId: item.runId ?? "",
       runPath: item.runId ? `runs/${item.runId}` : "",
       diagnosticsPath: item.metrics?.diagnostics_path ?? (item.runId ? `runs/${item.runId}/diagnostics.json` : ""),
+      topologyDiffSummary: topologyDiff.summaryText,
+      changedFieldCount: topologyDiff.changedFieldCount,
+      addedNodes: topologyDiff.addedNodes.join("; "),
+      removedNodes: topologyDiff.removedNodes.join("; "),
+      addedEdges: topologyDiff.addedEdges.join("; "),
+      removedEdges: topologyDiff.removedEdges.join("; "),
+      paramsDelta: resolution.totalParameters - baselineResolution.totalParameters,
+      flopsDelta: resolution.totalFlops - baselineResolution.totalFlops,
+      winnerSummary: winnerSummary?.bestId === item.id ? `${winnerSummary.title}; ${winnerSummary.detail}; ${winnerSummary.diffSummary}` : "",
       seed: item.metrics?.seed ?? null,
       learningRate: item.metrics?.learning_rate ?? null,
       accuracy: item.metrics?.test_accuracy ?? null,
@@ -2033,6 +2239,50 @@ function strongestConfusion(diagnostics?: RunDiagnostics | null): { truth: numbe
     }
   }
   return strongest;
+}
+
+function edgeKey(edge: TopologyEdge) {
+  return `${edge.source}->${edge.target}:${edge.branch ?? ""}`;
+}
+
+function edgeLabel(edge: TopologyEdge) {
+  return `${edge.source} -> ${edge.target}${edge.branch ? ` (${edge.branch})` : ""}`;
+}
+
+function kindLabel(kind: NodeKind) {
+  return kind.replaceAll("_", " ");
+}
+
+function parameterLabel(key: string) {
+  const labels: Record<string, string> = {
+    out_channels: "width",
+    drop_path: "drop-path",
+    use_se: "SE",
+    se_reduction: "SE reduction",
+    branch_count: "branches",
+    mode: "pooling",
+    hidden_features: "hidden",
+    embedding_features: "embedding",
+  };
+  return labels[key] ?? key.replaceAll("_", " ");
+}
+
+function formatParamValue(value: boolean | number | string | undefined) {
+  if (value === undefined) {
+    return "missing";
+  }
+  if (typeof value === "boolean") {
+    return value ? "on" : "off";
+  }
+  return String(value);
+}
+
+function summarizeDiffLines(lines: string[]) {
+  if (lines.length === 0) {
+    return "No architecture changes";
+  }
+  const visible = lines.slice(0, 2).join("; ");
+  return lines.length > 2 ? `${visible}; +${lines.length - 2} more` : visible;
 }
 
 function hydrateExperimentQueue(value: unknown): AblationQueueItem[] {
@@ -2088,6 +2338,15 @@ function toCsv(rows: ReturnType<typeof buildQueueReportRows>) {
     "runId",
     "runPath",
     "diagnosticsPath",
+    "topologyDiffSummary",
+    "changedFieldCount",
+    "addedNodes",
+    "removedNodes",
+    "addedEdges",
+    "removedEdges",
+    "paramsDelta",
+    "flopsDelta",
+    "winnerSummary",
     "seed",
     "learningRate",
     "accuracy",
@@ -2238,6 +2497,11 @@ function formatMaybeSignedPercent(value: number | null | undefined) {
 
 function formatLossDrop(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}% drop` : "-";
+}
+
+function formatDeltaCompact(value: number) {
+  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+  return `${sign}${formatCompactNumber(Math.abs(value))}`;
 }
 
 function formatMaybeNumber(value: number | null | undefined) {

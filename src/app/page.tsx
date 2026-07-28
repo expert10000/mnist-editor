@@ -1,11 +1,13 @@
 "use client";
 
 import {
+  BarChart3,
   BrainCircuit,
   CheckCircle2,
   Download,
   FileCode2,
   Link2,
+  ListChecks,
   LoaderCircle,
   Plus,
   Play,
@@ -77,6 +79,17 @@ type GeneratedRunSummary = {
   status: string;
   metrics: NonNullable<GeneratedTrainMetrics>;
 };
+type AblationQueueItem = {
+  id: string;
+  label: string;
+  note: string;
+  project: TopologyProject;
+  topologyId: string;
+  status: "queued" | "running" | "complete" | "failed";
+  runId?: string;
+  metrics?: NonNullable<GeneratedTrainMetrics>;
+  error?: string;
+};
 type DragState = {
   nodeId: string;
   startClientX: number;
@@ -101,6 +114,8 @@ export default function Home() {
   const [runHistory, setRunHistory] = useState<GeneratedRunSummary[]>([]);
   const [runsBusy, setRunsBusy] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [ablationQueue, setAblationQueue] = useState<AblationQueueItem[]>([]);
+  const [queueBusy, setQueueBusy] = useState(false);
   const [trainSettings, setTrainSettings] = useState<TrainSettings>({
     epochs: 1,
     trainLimit: 1024,
@@ -152,7 +167,7 @@ export default function Home() {
   }, [loadGeneratedMetrics, loadGeneratedRuns]);
 
   useEffect(() => {
-    if (!trainingBusy || !activeRunId) {
+    if (!trainingBusy || !activeRunId || queueBusy) {
       return;
     }
 
@@ -193,7 +208,41 @@ export default function Home() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activeRunId, loadGeneratedMetrics, loadGeneratedRuns, trainingBusy]);
+  }, [activeRunId, loadGeneratedMetrics, loadGeneratedRuns, queueBusy, trainingBusy]);
+
+  async function startGeneratedRun(targetProject: TopologyProject) {
+    const response = await fetch("/api/train-generated", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: targetProject, ...trainSettings }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.error ?? `Training failed with status ${response.status}.`);
+    }
+    setActiveRunId(payload.runId ?? null);
+    setTrainMetrics(payload.metrics ?? null);
+    setTrainingLogs(Array.isArray(payload.logs) ? payload.logs : []);
+    setSelectedRunId(payload.runId ?? null);
+    return payload as { runId: string; metrics?: NonNullable<GeneratedTrainMetrics>; logs?: string[]; status?: string; error?: string };
+  }
+
+  async function waitForGeneratedRun(runId: string) {
+    for (;;) {
+      await sleep(1000);
+      const response = await fetch(`/api/train-generated?runId=${encodeURIComponent(runId)}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (payload.metrics) {
+        setTrainMetrics(payload.metrics);
+      }
+      if (Array.isArray(payload.logs)) {
+        setTrainingLogs(payload.logs);
+      }
+      if (payload.status === "complete" || payload.status === "failed") {
+        return payload as { status: "complete" | "failed"; metrics?: NonNullable<GeneratedTrainMetrics>; logs?: string[]; error?: string };
+      }
+    }
+  }
 
   async function runGeneratedTraining() {
     setTrainingBusy(true);
@@ -201,24 +250,51 @@ export default function Home() {
     setActiveRunId(null);
     setNotice({ tone: "good", text: "Generated training started." });
     try {
-      const response = await fetch("/api/train-generated", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project, ...trainSettings }),
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(payload?.error ?? `Training failed with status ${response.status}.`);
-      }
-      setActiveRunId(payload.runId ?? null);
-      setTrainMetrics(payload.metrics ?? null);
-      setTrainingLogs(Array.isArray(payload.logs) ? payload.logs : []);
-      setSelectedRunId(payload.runId ?? null);
+      await startGeneratedRun(project);
       setNotice({ tone: "good", text: "Generated training is running." });
     } catch (error) {
       setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Generated training failed." });
       setTrainingBusy(false);
     } finally {
+      void loadGeneratedRuns();
+    }
+  }
+
+  function buildAblationQueue() {
+    const variants = createAblationVariants(project);
+    setAblationQueue(variants);
+    setNotice({ tone: "good", text: `Queued ${variants.length} topology variants.` });
+  }
+
+  async function runAblationQueue() {
+    const preparedQueue = ablationQueue.length > 0 ? ablationQueue : createAblationVariants(project);
+    setAblationQueue(preparedQueue);
+    setQueueBusy(true);
+    setTrainingBusy(true);
+    setTrainingLogs([]);
+    setNotice({ tone: "good", text: "Ablation queue started." });
+    try {
+      for (const item of preparedQueue) {
+        setAblationQueue((current) => updateQueueItem(current, item.id, { status: "running", error: undefined }));
+        const started = await startGeneratedRun(item.project);
+        setAblationQueue((current) => updateQueueItem(current, item.id, { runId: started.runId }));
+        const finished = await waitForGeneratedRun(started.runId);
+        setAblationQueue((current) =>
+          updateQueueItem(current, item.id, {
+            status: finished.status,
+            metrics: finished.metrics,
+            error: finished.error,
+          }),
+        );
+        void loadGeneratedRuns();
+      }
+      setNotice({ tone: "good", text: "Ablation queue completed." });
+    } catch (error) {
+      setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Ablation queue failed." });
+    } finally {
+      setQueueBusy(false);
+      setTrainingBusy(false);
+      void loadGeneratedMetrics();
       void loadGeneratedRuns();
     }
   }
@@ -571,10 +647,14 @@ export default function Home() {
         runsBusy={runsBusy}
         selectedRunId={selectedRunId}
         currentTopologyId={currentTopologyId}
+        ablationQueue={ablationQueue}
+        queueBusy={queueBusy}
         settings={trainSettings}
         onSettingsChange={setTrainSettings}
         onRefresh={refreshTrainingState}
         onRun={runGeneratedTraining}
+        onBuildQueue={buildAblationQueue}
+        onRunQueue={runAblationQueue}
         onSelectRun={setSelectedRunId}
       />
 
@@ -813,10 +893,14 @@ function GeneratedTrainingPanel({
   runsBusy,
   selectedRunId,
   currentTopologyId,
+  ablationQueue,
+  queueBusy,
   settings,
   onSettingsChange,
   onRefresh,
   onRun,
+  onBuildQueue,
+  onRunQueue,
   onSelectRun,
 }: {
   metrics: GeneratedTrainMetrics;
@@ -828,10 +912,14 @@ function GeneratedTrainingPanel({
   runsBusy: boolean;
   selectedRunId: string | null;
   currentTopologyId: string;
+  ablationQueue: AblationQueueItem[];
+  queueBusy: boolean;
   settings: TrainSettings;
   onSettingsChange: (settings: TrainSettings) => void;
   onRefresh: () => void;
   onRun: () => void;
+  onBuildQueue: () => void;
+  onRunQueue: () => void;
   onSelectRun: (runId: string | null) => void;
 }) {
   function updateSetting<K extends keyof TrainSettings>(key: K, value: TrainSettings[K]) {
@@ -847,6 +935,8 @@ function GeneratedTrainingPanel({
         ? 100
         : 0;
   const topologyMatches = displayedMetrics?.topology_id ? displayedMetrics.topology_id === currentTopologyId : undefined;
+  const chartRuns = buildChartRuns(runHistory, displayedMetrics, ablationQueue);
+  const batchLosses = parseBatchLosses(logs);
 
   return (
     <section className="trainingPanel">
@@ -856,9 +946,17 @@ function GeneratedTrainingPanel({
           <h2>MNIST training check</h2>
         </div>
         <div className="trainingActions">
-          <button type="button" onClick={onRun} disabled={trainingBusy}>
+          <button type="button" onClick={onRun} disabled={trainingBusy || queueBusy}>
             {trainingBusy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
             Run
+          </button>
+          <button type="button" onClick={onBuildQueue} disabled={trainingBusy || queueBusy}>
+            <ListChecks size={16} />
+            Queue
+          </button>
+          <button type="button" onClick={onRunQueue} disabled={trainingBusy || queueBusy}>
+            {queueBusy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
+            Run queue
           </button>
           <button type="button" onClick={onRefresh} disabled={metricsBusy || trainingBusy}>
             <RefreshCw size={16} />
@@ -953,6 +1051,8 @@ function GeneratedTrainingPanel({
       ) : (
         <div className="emptyTraining">No generated training metrics yet.</div>
       )}
+      <MetricCharts runs={chartRuns} batchLosses={batchLosses} />
+      <AblationQueuePanel queue={ablationQueue} currentTopologyId={currentTopologyId} />
       <div className="trainingRuntimeGrid">
         <div className="trainingLogPanel">
           <div className="subPanelHeader">
@@ -1004,6 +1104,101 @@ function GeneratedTrainingPanel({
   );
 }
 
+function MetricCharts({ runs, batchLosses }: { runs: Array<{ label: string; accuracy?: number; trainLoss?: number; testLoss?: number }>; batchLosses: number[] }) {
+  return (
+    <div className="metricChartsPanel">
+      <div className="subPanelHeader">
+        <strong>Metric charts</strong>
+        <BarChart3 size={16} />
+      </div>
+      <div className="metricChartGrid">
+        <TinyLineChart title="Accuracy" tone="good" values={runs.map((run) => run.accuracy)} labels={runs.map((run) => run.label)} formatValue={formatMaybePercent} />
+        <TinyLineChart title="Train loss" tone="blue" values={runs.map((run) => run.trainLoss)} labels={runs.map((run) => run.label)} formatValue={formatMaybeNumber} invert />
+        <TinyLineChart title="Test loss" tone="amber" values={runs.map((run) => run.testLoss)} labels={runs.map((run) => run.label)} formatValue={formatMaybeNumber} invert />
+        <TinyLineChart title="Live batch loss" tone="red" values={batchLosses} labels={batchLosses.map((_, index) => `B${index + 1}`)} formatValue={formatMaybeNumber} invert />
+      </div>
+    </div>
+  );
+}
+
+function TinyLineChart({
+  title,
+  values,
+  labels,
+  formatValue,
+  tone,
+  invert = false,
+}: {
+  title: string;
+  values: Array<number | null | undefined>;
+  labels: string[];
+  formatValue: (value: number | null | undefined) => string;
+  tone: "good" | "blue" | "amber" | "red";
+  invert?: boolean;
+}) {
+  const points = values
+    .map((value, index) => (typeof value === "number" && Number.isFinite(value) ? { value, index } : null))
+    .filter((point): point is { value: number; index: number } => Boolean(point));
+  const width = 260;
+  const height = 86;
+  const pad = 12;
+  const min = Math.min(...points.map((point) => point.value), 0);
+  const max = Math.max(...points.map((point) => point.value), 1);
+  const range = max - min || 1;
+  const path = points
+    .map((point, order) => {
+      const x = pad + (points.length === 1 ? width / 2 - pad : (point.index / Math.max(1, values.length - 1)) * (width - pad * 2));
+      const normalized = (point.value - min) / range;
+      const y = pad + (invert ? normalized : 1 - normalized) * (height - pad * 2);
+      return `${order === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" " );
+  const latest = points.at(-1);
+  return (
+    <div className={`metricChart ${tone}`}>
+      <div>
+        <span>{title}</span>
+        <strong>{formatValue(latest?.value)}</strong>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
+        <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} />
+        {path ? <path d={path} /> : null}
+        {points.map((point) => {
+          const x = pad + (points.length === 1 ? width / 2 - pad : (point.index / Math.max(1, values.length - 1)) * (width - pad * 2));
+          const normalized = (point.value - min) / range;
+          const y = pad + (invert ? normalized : 1 - normalized) * (height - pad * 2);
+          return <circle key={`${point.index}-${point.value}`} cx={x} cy={y} r="3"><title>{`${labels[point.index] ?? point.index}: ${formatValue(point.value)}`}</title></circle>;
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function AblationQueuePanel({ queue, currentTopologyId }: { queue: AblationQueueItem[]; currentTopologyId: string }) {
+  if (queue.length === 0) {
+    return null;
+  }
+  return (
+    <div className="ablationQueuePanel">
+      <div className="subPanelHeader">
+        <strong>Ablation queue</strong>
+        <span>{queue.length} variants</span>
+      </div>
+      <div className="ablationQueueGrid">
+        {queue.map((item) => (
+          <div className={`ablationQueueItem ${item.status}`} key={item.id}>
+            <span>{item.label}</span>
+            <strong>{formatMaybePercent(item.metrics?.test_accuracy)}</strong>
+            <small>{item.note}</small>
+            <small>train {formatMaybeNumber(item.metrics?.train_loss)} / test {formatMaybeNumber(item.metrics?.test_loss)}</small>
+            <small>{item.topologyId === currentTopologyId ? "current" : item.topologyId} / {item.status}</small>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function GeneratedFilesPanel({
   files,
   selectedPath,
@@ -1034,6 +1229,111 @@ function GeneratedFilesPanel({
       <pre className="codePreview">{selected.content}</pre>
     </div>
   );
+}
+
+function createAblationVariants(project: TopologyProject): AblationQueueItem[] {
+  const variants = [
+    {
+      id: "current",
+      label: "Current",
+      note: "Canvas topology",
+      project,
+    },
+    {
+      id: "wider-tail",
+      label: "Wider tail",
+      note: "Block 5 width +32",
+      project: mutateProject(project, "Wider Tail", (node) =>
+        node.id === "block5" && typeof node.parameters.out_channels === "number"
+          ? { ...node, parameters: { ...node.parameters, out_channels: node.parameters.out_channels + 32 } }
+          : node,
+      ),
+    },
+    {
+      id: "lighter-tail",
+      label: "Lighter tail",
+      note: "Blocks 4-5 width -16",
+      project: mutateProject(project, "Lighter Tail", (node) =>
+        (node.id === "block4" || node.id === "block5") && typeof node.parameters.out_channels === "number"
+          ? { ...node, parameters: { ...node.parameters, out_channels: Math.max(16, node.parameters.out_channels - 16) } }
+          : node,
+      ),
+    },
+    {
+      id: "low-drop",
+      label: "Low drop",
+      note: "Drop path halved",
+      project: mutateProject(project, "Low Drop", (node) =>
+        node.kind === "multi_branch_residual" && typeof node.parameters.drop_path === "number"
+          ? { ...node, parameters: { ...node.parameters, drop_path: Number((node.parameters.drop_path / 2).toFixed(3)) } }
+          : node,
+      ),
+    },
+  ];
+
+  return variants.map((variant) => ({
+    ...variant,
+    topologyId: topologyVersionId(variant.project),
+    status: "queued" as const,
+  }));
+}
+
+function mutateProject(project: TopologyProject, suffix: string, mutateNode: (node: TopologyNode) => TopologyNode): TopologyProject {
+  return {
+    ...project,
+    name: `${project.name} / ${suffix}`,
+    nodes: project.nodes.map((node) => mutateNode({ ...node, parameters: { ...node.parameters }, position: { ...node.position } })),
+    edges: project.edges.map((edge) => ({ ...edge })),
+  };
+}
+
+function updateQueueItem(queue: AblationQueueItem[], id: string, patch: Partial<AblationQueueItem>) {
+  return queue.map((item) => (item.id === id ? { ...item, ...patch } : item));
+}
+
+function buildChartRuns(runHistory: GeneratedRunSummary[], currentMetrics: GeneratedTrainMetrics, queue: AblationQueueItem[]) {
+  const queueResults = queue
+    .filter((item) => item.metrics)
+    .map((item) => ({
+      label: item.label,
+      accuracy: item.metrics?.test_accuracy ?? undefined,
+      trainLoss: item.metrics?.train_loss ?? undefined,
+      testLoss: item.metrics?.test_loss ?? undefined,
+    }));
+  if (queueResults.length > 0) {
+    return queueResults;
+  }
+
+  const completed = runHistory
+    .filter((run) => run.metrics && (run.metrics.test_accuracy !== null || run.metrics.train_loss !== null || run.metrics.test_loss !== null))
+    .slice(0, 11)
+    .reverse()
+    .map((run) => ({
+      label: formatRunLabel(run.runId),
+      accuracy: run.metrics.test_accuracy ?? undefined,
+      trainLoss: run.metrics.train_loss ?? undefined,
+      testLoss: run.metrics.test_loss ?? undefined,
+    }));
+  if (currentMetrics?.status === "running") {
+    completed.push({
+      label: "Live",
+      accuracy: currentMetrics.test_accuracy ?? undefined,
+      trainLoss: currentMetrics.train_loss ?? undefined,
+      testLoss: currentMetrics.test_loss ?? undefined,
+    });
+  }
+  return completed;
+}
+
+function parseBatchLosses(logs: string[]) {
+  return logs
+    .map((line) => /batch \d+\/\d+ loss=([0-9.]+)/.exec(line)?.[1])
+    .filter((value): value is string => Boolean(value))
+    .map(Number);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function getBranchRepair(node: { kind: string; parameters: Record<string, boolean | number | string> }) {

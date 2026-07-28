@@ -1014,3 +1014,141 @@ h1 {
     align-items: flex-start;
   }
 }
+
+.metricChartsPanel,
+.ablationQueuePanel {
+  display: grid;
+  gap: 8px;
+}
+
+.metricChartGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.metricChart {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.metricChart div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.metricChart span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metricChart strong {
+  color: var(--ink);
+  font-size: 0.86rem;
+}
+
+.metricChart svg {
+  width: 100%;
+  height: 86px;
+}
+
+.metricChart line {
+  stroke: #d7dee8;
+  stroke-width: 1;
+}
+
+.metricChart path {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.metricChart circle {
+  fill: #ffffff;
+  stroke-width: 2;
+}
+
+.metricChart.good path,
+.metricChart.good circle {
+  stroke: var(--green);
+}
+
+.metricChart.blue path,
+.metricChart.blue circle {
+  stroke: var(--blue);
+}
+
+.metricChart.amber path,
+.metricChart.amber circle {
+  stroke: var(--amber);
+}
+
+.metricChart.red path,
+.metricChart.red circle {
+  stroke: var(--red);
+}
+
+.ablationQueueGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ablationQueueItem {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.ablationQueueItem span,
+.ablationQueueItem small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ablationQueueItem strong {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.ablationQueueItem.running {
+  border-color: rgba(36, 87, 166, 0.38);
+  background: #edf4ff;
+}
+
+.ablationQueueItem.complete {
+  border-color: rgba(23, 114, 69, 0.34);
+  background: #f4faf6;
+}
+
+.ablationQueueItem.failed {
+  border-color: rgba(184, 50, 58, 0.34);
+  background: #fff6f6;
+}
+
+@media (max-width: 980px) {
+  .metricChartGrid,
+  .ablationQueueGrid {
+    grid-template-columns: 1fr;
+  }
+}

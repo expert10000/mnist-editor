@@ -55,5 +55,7 @@ This repository starts with the Phase 1 dashboard prototype:
 - generated checkpoints saved locally under `generated/`.
 - live generated training progress, logs, and saved run history in the editor UI;
 - stable topology IDs for comparing a saved result with the current canvas.
+- metric charts for accuracy, train loss, test loss, and live batch loss;
+- ablation queue for running multiple topology variants one after another.
 
-Next phases will add ablation queues, richer metric charts, and OOF-aware experiment generation.
+Next phases will add OOF-aware experiment generation and richer export/reporting for completed runs.

@@ -17,6 +17,7 @@ type WinnerPayload = {
   project?: unknown;
   metrics?: unknown;
   diagnostics?: unknown;
+  replayComparisons?: unknown;
   report?: unknown;
   manifest?: unknown;
 };
@@ -47,6 +48,11 @@ export async function POST(request: Request) {
   await writeFile(path.join(directory, "project.json"), JSON.stringify(parsed.project, null, 2), "utf8");
   await writeFile(path.join(directory, "metrics.json"), JSON.stringify(isRecord(payload.metrics) ? payload.metrics : {}, null, 2), "utf8");
   await writeFile(path.join(directory, "diagnostics.json"), JSON.stringify(isRecord(payload.diagnostics) ? payload.diagnostics : {}, null, 2), "utf8");
+  await writeFile(
+    path.join(directory, "replay_comparisons.json"),
+    JSON.stringify(Array.isArray(payload.replayComparisons) ? payload.replayComparisons : [], null, 2),
+    "utf8",
+  );
   await writeFile(path.join(directory, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
   await writeFile(path.join(directory, "report.json"), JSON.stringify({ exportedAt: now, report: payload.report ?? null }, null, 2), "utf8");
   for (const file of generatedFiles) {

@@ -86,6 +86,7 @@ type GeneratedTrainMetrics = {
   epoch_history?: Array<{ epoch: number; train_loss: number; test_loss: number; test_accuracy: number }>;
   diagnostics_path?: string;
   diagnostics?: RunDiagnostics | null;
+  replay_comparison?: NonNullable<ReplayComparison> | null;
   checkpoint?: string;
   duration_seconds?: number;
   passed_smoke_rule: boolean | null;
@@ -125,6 +126,8 @@ type WinnerSummary = {
   bestId: string;
 };
 type ReplayComparison = {
+  createdAt: string;
+  savedAt?: string;
   originalRunId: string;
   replayRunId: string;
   originalAccuracy: number | null;
@@ -134,6 +137,10 @@ type ReplayComparison = {
   accuracyDelta: number | null;
   lossDelta: number | null;
   reproducible: boolean;
+  tolerance: {
+    accuracy: number;
+    loss: number;
+  };
 } | null;
 type GeneratedRunSummary = {
   runId: string;
@@ -192,6 +199,10 @@ const RUN_PRESET_LABELS: Record<RunPreset, string> = {
   balanced: "Balanced",
   stronger: "Stronger",
   custom: "Custom",
+};
+const REPLAY_TOLERANCE = {
+  accuracy: 0.005,
+  loss: 0.25,
 };
 
 export default function Home() {
@@ -512,6 +523,7 @@ export default function Home() {
       diff: buildTopologyDiff(enhancedFiveBlockTopology, project),
       generatedFiles,
       queue: ablationQueue,
+      replayComparisons: replayComparisonsFromRuns(runHistory, replayComparison),
     });
     downloadTextFile(`mnist-run-bundle-${currentTopologyId}.json`, JSON.stringify(bundle, null, 2), "application/json");
     setNotice({ tone: "good", text: "Run bundle exported." });
@@ -551,6 +563,7 @@ export default function Home() {
       const finished = await waitForGeneratedRun(started.runId);
       const comparison = compareReplay(originalRunId, started.runId, originalMetrics, finished.metrics ?? null);
       setReplayComparison(comparison);
+      await saveReplayComparison(comparison);
       setNotice({ tone: comparison.reproducible ? "good" : "bad", text: comparison.reproducible ? "Replay matches original within tolerance." : "Replay finished outside tolerance." });
       void loadGeneratedRuns();
     } catch (error) {
@@ -559,6 +572,21 @@ export default function Home() {
       setTrainingBusy(false);
       setActiveRunId(null);
       void loadGeneratedMetrics();
+    }
+  }
+
+  async function saveReplayComparison(comparison: NonNullable<ReplayComparison>) {
+    const response = await fetch("/api/replay-comparison", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ replayRunId: comparison.replayRunId, comparison }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.error ?? "Could not save replay comparison.");
+    }
+    if (payload?.comparison) {
+      setReplayComparison(payload.comparison);
     }
   }
 
@@ -581,6 +609,7 @@ export default function Home() {
         project: best.project,
         metrics: best.metrics,
         diagnostics: best.metrics.diagnostics ?? null,
+        replayComparisons: replayComparisonsFromRuns(runHistory, replayComparison),
         report: { winnerSummary, rows: reportRows },
         manifest: {
           topologyDiff: buildTopologyDiff(enhancedFiveBlockTopology, best.project),
@@ -1561,6 +1590,7 @@ function GeneratedTrainingPanel({
         onReplayBest={onReplayBest}
         onLockWinner={onLockWinner}
       />
+      <ReplayHistoryPanel comparisons={replayComparisonsFromRuns(runHistory, replayComparison)} />
       <QueueToolbar
         preset={queuePreset}
         experimentName={experimentName}
@@ -1862,6 +1892,36 @@ function TraceabilityPanel({
           </small>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function ReplayHistoryPanel({ comparisons }: { comparisons: NonNullable<ReplayComparison>[] }) {
+  if (comparisons.length === 0) {
+    return null;
+  }
+  return (
+    <div className="replayHistoryPanel">
+      <div className="subPanelHeader">
+        <strong>Replay history</strong>
+        <span>{comparisons.length} saved</span>
+      </div>
+      <div className="replayHistoryTable">
+        <div className="tableHead">Original</div>
+        <div className="tableHead">Replay</div>
+        <div className="tableHead">Accuracy</div>
+        <div className="tableHead">Loss</div>
+        <div className="tableHead">Status</div>
+        {comparisons.slice(0, 8).map((comparison) => (
+          <Fragment key={`${comparison.originalRunId}-${comparison.replayRunId}`}>
+            <span>{formatRunLabel(comparison.originalRunId)}</span>
+            <span>{formatRunLabel(comparison.replayRunId)}</span>
+            <strong>{formatMaybeSignedPercent(comparison.accuracyDelta)}</strong>
+            <strong>{formatMaybeNumber(comparison.lossDelta)}</strong>
+            <span className={comparison.reproducible ? "match" : "mismatch"}>{comparison.reproducible ? "reproducible" : "drifted"}</span>
+          </Fragment>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2320,9 +2380,10 @@ function compareReplay(originalRunId: string, replayRunId: string, original: Non
   const reproducible =
     typeof accuracyDelta === "number" &&
     typeof lossDelta === "number" &&
-    Math.abs(accuracyDelta) <= 0.005 &&
-    Math.abs(lossDelta) <= 0.25;
+    Math.abs(accuracyDelta) <= REPLAY_TOLERANCE.accuracy &&
+    Math.abs(lossDelta) <= REPLAY_TOLERANCE.loss;
   return {
+    createdAt: new Date().toISOString(),
     originalRunId,
     replayRunId,
     originalAccuracy,
@@ -2332,6 +2393,7 @@ function compareReplay(originalRunId: string, replayRunId: string, original: Non
     accuracyDelta,
     lossDelta,
     reproducible,
+    tolerance: REPLAY_TOLERANCE,
   };
 }
 
@@ -2343,6 +2405,7 @@ function buildRunBundle({
   diff,
   generatedFiles,
   queue,
+  replayComparisons,
 }: {
   project: TopologyProject;
   metrics: GeneratedTrainMetrics;
@@ -2351,6 +2414,7 @@ function buildRunBundle({
   diff: TopologyDiff;
   generatedFiles: GeneratedFile[];
   queue: AblationQueueItem[];
+  replayComparisons: NonNullable<ReplayComparison>[];
 }) {
   return {
     exportedAt: new Date().toISOString(),
@@ -2359,6 +2423,7 @@ function buildRunBundle({
     trainSettings: metrics ? settingsFromMetrics(metrics, settings) : settings,
     metrics,
     diagnostics: metrics?.diagnostics ?? null,
+    replayComparisons,
     manifest: {
       topologyId: topologyVersionId(project),
       params: resolution.totalParameters,
@@ -2367,6 +2432,21 @@ function buildRunBundle({
       winnerSummary: buildWinnerSummary(queue),
     },
   };
+}
+
+function replayComparisonsFromRuns(runHistory: GeneratedRunSummary[], latest: ReplayComparison) {
+  const comparisons = [
+    ...(latest ? [latest] : []),
+    ...runHistory.map((run) => run.metrics.replay_comparison).filter((comparison): comparison is NonNullable<ReplayComparison> => Boolean(comparison)),
+  ];
+  const seen = new Set<string>();
+  return comparisons.filter((comparison) => {
+    if (seen.has(comparison.replayRunId)) {
+      return false;
+    }
+    seen.add(comparison.replayRunId);
+    return true;
+  });
 }
 
 function buildChartRuns(runHistory: GeneratedRunSummary[], currentMetrics: GeneratedTrainMetrics, queue: AblationQueueItem[]) {

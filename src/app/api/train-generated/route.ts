@@ -319,7 +319,12 @@ async function metricsWithDiagnostics(metrics: unknown, runDir: string) {
     return null;
   }
   const diagnostics = await readJson(path.join(runDir, "diagnostics.json"));
-  return isRecord(diagnostics) ? { ...metrics, diagnostics } : metrics;
+  const replayComparison = await readJson(path.join(runDir, "replay_comparison.json"));
+  return {
+    ...metrics,
+    ...(isRecord(diagnostics) ? { diagnostics } : {}),
+    ...(isRecord(replayComparison) ? { replay_comparison: replayComparison } : {}),
+  };
 }
 
 function getString(value: unknown, key: string) {

@@ -1489,6 +1489,41 @@ h1 {
   font-size: 0.76rem;
 }
 
+.replayHistoryPanel {
+  display: grid;
+  gap: 8px;
+}
+
+.replayHistoryTable {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr) minmax(78px, 0.75fr) minmax(72px, 0.7fr) minmax(92px, 0.8fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.replayHistoryTable span,
+.replayHistoryTable strong {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.replayHistoryTable .match {
+  color: var(--green);
+}
+
+.replayHistoryTable .mismatch {
+  color: var(--red);
+}
+
 .ablationQueueGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

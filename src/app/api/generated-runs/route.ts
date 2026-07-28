@@ -51,7 +51,12 @@ async function metricsWithDiagnostics(metrics: Record<string, unknown> | null, r
     return null;
   }
   const diagnostics = await readJson(path.join(runDir, "diagnostics.json"));
-  return diagnostics ? { ...metrics, diagnostics } : metrics;
+  const replayComparison = await readJson(path.join(runDir, "replay_comparison.json"));
+  return {
+    ...metrics,
+    ...(diagnostics ? { diagnostics } : {}),
+    ...(replayComparison ? { replay_comparison: replayComparison } : {}),
+  };
 }
 
 function stringField(value: Record<string, unknown>, key: string) {

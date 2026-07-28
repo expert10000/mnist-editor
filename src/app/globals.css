@@ -280,7 +280,7 @@ h1 {
 
 .trainingControls {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -292,7 +292,8 @@ h1 {
   font-weight: 900;
 }
 
-.trainingControls input {
+.trainingControls input,
+.trainingControls select {
   min-width: 0;
   min-height: 36px;
   border: 1px solid var(--line);
@@ -300,6 +301,7 @@ h1 {
   padding: 0 9px;
   background: #fbfcfd;
   color: var(--ink);
+  font: inherit;
 }
 
 .trainingToggle {
@@ -317,6 +319,52 @@ h1 {
   margin: 0;
   color: var(--muted);
   font-size: 0.86rem;
+}
+
+.improvementBadge {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.improvementBadge.good {
+  border-color: rgba(23, 114, 69, 0.28);
+  background: #f4faf6;
+  color: #176a45;
+}
+
+.improvementBadge.warn {
+  border-color: rgba(168, 100, 19, 0.32);
+  background: #fff8e8;
+  color: #8b5a13;
+}
+
+.improvementBadge.bad {
+  border-color: rgba(159, 37, 54, 0.28);
+  background: #fff5f6;
+  color: #9f2536;
+}
+
+.improvementBadge div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.improvementBadge strong {
+  color: var(--ink);
+  font-size: 0.92rem;
+}
+
+.improvementBadge span {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 800;
 }
 
 .trainingMetricGrid {

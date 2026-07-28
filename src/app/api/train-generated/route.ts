@@ -17,6 +17,8 @@ type TrainRequest = {
   trainLimit?: unknown;
   testLimit?: unknown;
   batchSize?: unknown;
+  learningRate?: unknown;
+  seed?: unknown;
   cpu?: unknown;
 };
 
@@ -104,6 +106,8 @@ export async function POST(request: Request) {
   const trainLimit = clampInt(payload.trainLimit, 128, 10_000, 1024);
   const testLimit = clampInt(payload.testLimit, 128, 5_000, 512);
   const batchSize = clampInt(payload.batchSize, 16, 512, 128);
+  const learningRate = clampFloat(payload.learningRate, 0.00001, 0.1, 0.001);
+  const seed = clampInt(payload.seed, 0, 999_999, 7);
   const initialMetrics = {
     status: "running",
     run_id: runId,
@@ -113,15 +117,24 @@ export async function POST(request: Request) {
     epochs,
     train_limit: trainLimit,
     test_limit: testLimit,
-    seed: 7,
+    seed,
+    learning_rate: learningRate,
     current_epoch: 0,
     current_batch: 0,
     total_batches: 0,
     first_batch_loss: null,
     final_batch_loss: null,
+    final_batch_accuracy: null,
     train_loss: null,
+    train_accuracy: null,
+    baseline_test_loss: null,
+    baseline_accuracy: null,
     test_loss: null,
     test_accuracy: null,
+    best_accuracy: null,
+    best_epoch: 0,
+    accuracy_delta: null,
+    epoch_history: [],
     checkpoint: path.join("runs", runId, "checkpoint.pt"),
     duration_seconds: 0,
     passed_smoke_rule: null,
@@ -140,6 +153,10 @@ export async function POST(request: Request) {
     String(testLimit),
     "--batch-size",
     String(batchSize),
+    "--lr",
+    String(learningRate),
+    "--seed",
+    String(seed),
     "--generated-dir",
     runDir,
     "--run-dir",
@@ -301,5 +318,10 @@ function projectPath(...segments: string[]) {
 
 function clampInt(value: unknown, min: number, max: number, fallback: number) {
   const numberValue = typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : fallback;
+  return Math.max(min, Math.min(max, numberValue));
+}
+
+function clampFloat(value: unknown, min: number, max: number, fallback: number) {
+  const numberValue = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.max(min, Math.min(max, numberValue));
 }

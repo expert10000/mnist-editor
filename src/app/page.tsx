@@ -45,12 +45,16 @@ type BottomPanel = "trace" | "validation" | "generated";
 type EditorHistory = { past: TopologyProject[]; present: TopologyProject; future: TopologyProject[] };
 type Notice = { tone: "good" | "bad"; text: string } | null;
 type TrainSettings = {
+  preset: RunPreset;
   epochs: number;
   trainLimit: number;
   testLimit: number;
   batchSize: number;
+  learningRate: number;
+  seed: number;
   cpu: boolean;
 };
+type RunPreset = "fast" | "balanced" | "stronger" | "custom";
 type QueuePreset = "width" | "dropPath" | "pooling" | "se";
 type GeneratedTrainMetrics = {
   status: string;
@@ -62,6 +66,7 @@ type GeneratedTrainMetrics = {
   train_limit: number;
   test_limit: number;
   seed?: number;
+  learning_rate?: number;
   current_epoch?: number;
   current_batch?: number;
   total_batches?: number;
@@ -129,6 +134,19 @@ type DragState = {
   moved: boolean;
 };
 
+const RUN_PRESETS: Record<Exclude<RunPreset, "custom">, Omit<TrainSettings, "preset" | "cpu">> = {
+  fast: { epochs: 1, trainLimit: 1024, testLimit: 512, batchSize: 128, learningRate: 0.001, seed: 7 },
+  balanced: { epochs: 2, trainLimit: 2048, testLimit: 1024, batchSize: 128, learningRate: 0.001, seed: 7 },
+  stronger: { epochs: 3, trainLimit: 4096, testLimit: 2048, batchSize: 128, learningRate: 0.0008, seed: 7 },
+};
+
+const RUN_PRESET_LABELS: Record<RunPreset, string> = {
+  fast: "Fast",
+  balanced: "Balanced",
+  stronger: "Stronger",
+  custom: "Custom",
+};
+
 export default function Home() {
   const [history, setHistory] = useState<EditorHistory>({ past: [], present: enhancedFiveBlockTopology, future: [] });
   const [selectedNodeId, setSelectedNodeId] = useState("block3");
@@ -151,10 +169,8 @@ export default function Home() {
   const [selectedExperimentName, setSelectedExperimentName] = useState("");
   const [experimentsBusy, setExperimentsBusy] = useState(false);
   const [trainSettings, setTrainSettings] = useState<TrainSettings>({
-    epochs: 1,
-    trainLimit: 1024,
-    testLimit: 512,
-    batchSize: 128,
+    preset: "balanced",
+    ...RUN_PRESETS.balanced,
     cpu: true,
   });
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
@@ -1172,7 +1188,11 @@ function GeneratedTrainingPanel({
   onSelectRun: (runId: string | null) => void;
 }) {
   function updateSetting<K extends keyof TrainSettings>(key: K, value: TrainSettings[K]) {
-    onSettingsChange({ ...settings, [key]: value });
+    onSettingsChange({ ...settings, preset: key === "preset" ? (value as RunPreset) : "custom", [key]: value });
+  }
+
+  function applyRunPreset(preset: Exclude<RunPreset, "custom">) {
+    onSettingsChange({ preset, ...RUN_PRESETS[preset], cpu: settings.cpu });
   }
 
   const selectedRun = runHistory.find((run) => run.runId === selectedRunId);
@@ -1192,6 +1212,7 @@ function GeneratedTrainingPanel({
   const progressTotal = displayedMetrics?.total_batches ?? 0;
   const chartRuns = buildChartRuns(runHistory, displayedMetrics, ablationQueue);
   const batchLosses = parseBatchLosses(logs);
+  const improvementCheck = getImprovementCheck(displayedMetrics);
 
   return (
     <section className="trainingPanel">
@@ -1257,6 +1278,28 @@ function GeneratedTrainingPanel({
       ) : null}
       <div className="trainingControls">
         <label>
+          <span>Run preset</span>
+          <select
+            value={settings.preset}
+            onChange={(event) => {
+              if (event.target.value !== "custom") {
+                applyRunPreset(event.target.value as Exclude<RunPreset, "custom">);
+              }
+            }}
+          >
+            {settings.preset === "custom" ? (
+              <option value="custom" disabled>
+                Custom
+              </option>
+            ) : null}
+            {(["fast", "balanced", "stronger"] as const).map((preset) => (
+              <option key={preset} value={preset}>
+                {RUN_PRESET_LABELS[preset]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
           <span>Epochs</span>
           <input min={1} max={5} type="number" value={settings.epochs} onChange={(event) => updateSetting("epochs", Number(event.target.value))} />
         </label>
@@ -1293,12 +1336,45 @@ function GeneratedTrainingPanel({
             onChange={(event) => updateSetting("batchSize", Number(event.target.value))}
           />
         </label>
+        <label>
+          <span>Learning rate</span>
+          <input
+            min={0.00001}
+            max={0.1}
+            step={0.0001}
+            type="number"
+            value={settings.learningRate}
+            onChange={(event) => updateSetting("learningRate", Number(event.target.value))}
+          />
+        </label>
+        <label>
+          <span>Seed</span>
+          <input
+            min={0}
+            max={999999}
+            step={1}
+            type="number"
+            value={settings.seed}
+            onChange={(event) => updateSetting("seed", Number(event.target.value))}
+          />
+        </label>
         <label className="trainingToggle">
           <span>CPU</span>
           <input type="checkbox" checked={settings.cpu} onChange={(event) => updateSetting("cpu", event.target.checked)} />
         </label>
       </div>
-      <p className="trainingNote">Default settings are tuned for a quick real-MNIST compiler check.</p>
+      <p className="trainingNote">
+        Fast checks compilation quickly. Balanced is the default comparison run. Stronger spends more time for ablation decisions.
+      </p>
+      {improvementCheck ? (
+        <div className={`improvementBadge ${improvementCheck.tone}`}>
+          {improvementCheck.tone === "good" ? <CheckCircle2 size={18} /> : <TriangleAlert size={18} />}
+          <div>
+            <strong>{improvementCheck.title}</strong>
+            <span>{improvementCheck.detail}</span>
+          </div>
+        </div>
+      ) : null}
       <QueueToolbar
         preset={queuePreset}
         experimentName={experimentName}
@@ -1344,6 +1420,9 @@ function GeneratedTrainingPanel({
           </span>
           <span>
             Samples <strong>{displayedMetrics.train_limit.toLocaleString()} / {displayedMetrics.test_limit.toLocaleString()}</strong>
+          </span>
+          <span>
+            LR / seed <strong>{formatLearningRate(displayedMetrics.learning_rate)} / {displayedMetrics.seed ?? "-"}</strong>
           </span>
           <span>
             Checkpoint <strong>{displayedMetrics.checkpoint ?? "-"}</strong>
@@ -1772,6 +1851,8 @@ function buildQueueReportRows(queue: AblationQueueItem[]) {
       status: item.status,
       runId: item.runId ?? "",
       runPath: item.runId ? `runs/${item.runId}` : "",
+      seed: item.metrics?.seed ?? null,
+      learningRate: item.metrics?.learning_rate ?? null,
       accuracy: item.metrics?.test_accuracy ?? null,
       baselineAccuracy: item.metrics?.baseline_accuracy ?? null,
       bestAccuracy: item.metrics?.best_accuracy ?? item.metrics?.test_accuracy ?? null,
@@ -1846,6 +1927,8 @@ function toCsv(rows: ReturnType<typeof buildQueueReportRows>) {
     "status",
     "runId",
     "runPath",
+    "seed",
+    "learningRate",
     "accuracy",
     "baselineAccuracy",
     "bestAccuracy",
@@ -1886,6 +1969,62 @@ function parseBatchLosses(logs: string[]) {
     .map((line) => /batch \d+\/\d+ loss=([0-9.]+)/.exec(line)?.[1])
     .filter((value): value is string => Boolean(value))
     .map(Number);
+}
+
+function getImprovementCheck(metrics: GeneratedTrainMetrics) {
+  if (!metrics) {
+    return null;
+  }
+  if (
+    typeof metrics.baseline_accuracy !== "number" &&
+    typeof metrics.first_batch_loss !== "number" &&
+    typeof metrics.test_accuracy !== "number"
+  ) {
+    return null;
+  }
+  const baselineAccuracy = metrics.baseline_accuracy;
+  const bestAccuracy = metrics.best_accuracy ?? metrics.test_accuracy;
+  const accuracyDelta =
+    typeof metrics.accuracy_delta === "number"
+      ? metrics.accuracy_delta
+      : typeof baselineAccuracy === "number" && typeof bestAccuracy === "number"
+        ? bestAccuracy - baselineAccuracy
+        : null;
+  const trainLossDrop =
+    typeof metrics.first_batch_loss === "number" && metrics.first_batch_loss > 0 && typeof metrics.final_batch_loss === "number"
+      ? (metrics.first_batch_loss - metrics.final_batch_loss) / metrics.first_batch_loss
+      : null;
+  const validationLossTrend = getValidationLossTrend(metrics);
+  const accuracyMoved = typeof accuracyDelta === "number" && accuracyDelta >= 0.01;
+  const trainLossMoved = typeof trainLossDrop === "number" && trainLossDrop >= 0.05;
+  const validationIsBetter = typeof validationLossTrend === "number" ? validationLossTrend <= -0.02 : false;
+  const validationIsWorse = typeof validationLossTrend === "number" ? validationLossTrend >= 0.02 : false;
+  const tone = accuracyMoved && trainLossMoved && !validationIsWorse ? "good" : accuracyMoved || trainLossMoved ? "warn" : "bad";
+  const title =
+    tone === "good"
+      ? "Improvement check passed"
+      : tone === "warn"
+        ? "Training improved, validate carefully"
+        : "No clear improvement yet";
+  const validationLabel = validationIsBetter ? "val loss down" : validationIsWorse ? "val loss up" : "val loss flat";
+  return {
+    tone,
+    title,
+    detail: `Baseline ${formatMaybePercent(baselineAccuracy)} -> best ${formatMaybePercent(bestAccuracy)}; train loss ${formatLossDrop(trainLossDrop)}; ${validationLabel}.`,
+  };
+}
+
+function getValidationLossTrend(metrics: NonNullable<GeneratedTrainMetrics>) {
+  const history = metrics.epoch_history ?? [];
+  if (history.length >= 2) {
+    const first = history[0]?.test_loss;
+    const last = history[history.length - 1]?.test_loss;
+    return typeof first === "number" && typeof last === "number" ? last - first : null;
+  }
+  if (typeof metrics.baseline_test_loss === "number" && typeof metrics.test_loss === "number") {
+    return metrics.test_loss - metrics.baseline_test_loss;
+  }
+  return null;
 }
 
 function sleep(ms: number) {
@@ -1933,8 +2072,16 @@ function formatMaybeSignedPercent(value: number | null | undefined) {
   return value > 0 ? `+${formatted}` : formatted;
 }
 
+function formatLossDrop(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}% drop` : "-";
+}
+
 function formatMaybeNumber(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "-";
+}
+
+function formatLearningRate(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toString() : "-";
 }
 
 function formatRunLabel(runId: string) {

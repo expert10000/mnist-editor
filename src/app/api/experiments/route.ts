@@ -101,6 +101,8 @@ function toCsv(rows: unknown[]) {
     "status",
     "runId",
     "runPath",
+    "seed",
+    "learningRate",
     "accuracy",
     "baselineAccuracy",
     "bestAccuracy",

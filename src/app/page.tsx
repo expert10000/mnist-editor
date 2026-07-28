@@ -65,6 +65,7 @@ type GeneratedTrainMetrics = {
   epochs: number;
   train_limit: number;
   test_limit: number;
+  batch_size?: number;
   seed?: number;
   learning_rate?: number;
   current_epoch?: number;
@@ -123,6 +124,17 @@ type WinnerSummary = {
   diffSummary: string;
   bestId: string;
 };
+type ReplayComparison = {
+  originalRunId: string;
+  replayRunId: string;
+  originalAccuracy: number | null;
+  replayAccuracy: number | null;
+  originalLoss: number | null;
+  replayLoss: number | null;
+  accuracyDelta: number | null;
+  lossDelta: number | null;
+  reproducible: boolean;
+} | null;
 type GeneratedRunSummary = {
   runId: string;
   topologyId?: string;
@@ -193,6 +205,7 @@ export default function Home() {
   const [trainingBusy, setTrainingBusy] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [trainingLogs, setTrainingLogs] = useState<string[]>([]);
+  const [replayComparison, setReplayComparison] = useState<ReplayComparison>(null);
   const [runHistory, setRunHistory] = useState<GeneratedRunSummary[]>([]);
   const [runsBusy, setRunsBusy] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -308,11 +321,11 @@ export default function Home() {
     };
   }, [activeRunId, loadGeneratedMetrics, loadGeneratedRuns, queueBusy, trainingBusy]);
 
-  async function startGeneratedRun(targetProject: TopologyProject) {
+  async function startGeneratedRun(targetProject: TopologyProject, settingsOverride: TrainSettings = trainSettings) {
     const response = await fetch("/api/train-generated", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project: targetProject, ...trainSettings }),
+      body: JSON.stringify({ project: targetProject, ...settingsOverride }),
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
@@ -486,6 +499,102 @@ export default function Home() {
     }
     downloadTextFile("mnist-ablation-report.csv", toCsv(rows), "text/csv");
     setNotice({ tone: "good", text: "CSV comparison report exported." });
+  }
+
+  function exportRunBundle() {
+    const selectedRun = runHistory.find((run) => run.runId === selectedRunId);
+    const metrics = selectedRun?.metrics ?? trainMetrics;
+    const bundle = buildRunBundle({
+      project,
+      metrics,
+      settings: trainSettings,
+      resolution,
+      diff: buildTopologyDiff(enhancedFiveBlockTopology, project),
+      generatedFiles,
+      queue: ablationQueue,
+    });
+    downloadTextFile(`mnist-run-bundle-${currentTopologyId}.json`, JSON.stringify(bundle, null, 2), "application/json");
+    setNotice({ tone: "good", text: "Run bundle exported." });
+  }
+
+  async function replayCurrentRun() {
+    const selectedRun = runHistory.find((run) => run.runId === selectedRunId);
+    const originalMetrics = selectedRun?.metrics ?? trainMetrics;
+    if (!originalMetrics) {
+      setNotice({ tone: "bad", text: "No original run metrics to replay yet." });
+      return;
+    }
+    if (originalMetrics.topology_id && originalMetrics.topology_id !== currentTopologyId) {
+      setNotice({ tone: "bad", text: "Selected run topology differs from the canvas. Load that topology before replaying." });
+      return;
+    }
+    await replayProjectRun(project, originalMetrics, selectedRun?.runId ?? originalMetrics.run_id ?? "latest");
+  }
+
+  async function replayBestVariant() {
+    const best = bestQueueVariant(ablationQueue);
+    if (!best?.metrics) {
+      setNotice({ tone: "bad", text: "No completed queue winner to replay yet." });
+      return;
+    }
+    await replayProjectRun(best.project, best.metrics, best.runId ?? best.metrics.run_id ?? best.id);
+  }
+
+  async function replayProjectRun(targetProject: TopologyProject, originalMetrics: NonNullable<GeneratedTrainMetrics>, originalRunId: string) {
+    const replaySettings = settingsFromMetrics(originalMetrics, trainSettings);
+    setTrainingBusy(true);
+    setTrainingLogs([]);
+    setReplayComparison(null);
+    setNotice({ tone: "good", text: "Replay run started." });
+    try {
+      const started = await startGeneratedRun(targetProject, replaySettings);
+      const finished = await waitForGeneratedRun(started.runId);
+      const comparison = compareReplay(originalRunId, started.runId, originalMetrics, finished.metrics ?? null);
+      setReplayComparison(comparison);
+      setNotice({ tone: comparison.reproducible ? "good" : "bad", text: comparison.reproducible ? "Replay matches original within tolerance." : "Replay finished outside tolerance." });
+      void loadGeneratedRuns();
+    } catch (error) {
+      setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Replay run failed." });
+    } finally {
+      setTrainingBusy(false);
+      setActiveRunId(null);
+      void loadGeneratedMetrics();
+    }
+  }
+
+  async function lockWinner() {
+    const best = bestQueueVariant(ablationQueue);
+    if (!best?.metrics) {
+      setNotice({ tone: "bad", text: "No completed queue winner to lock yet." });
+      return;
+    }
+    const name = experimentName.trim() || defaultExperimentName(queuePreset);
+    const reportRows = buildQueueReportRows(ablationQueue);
+    const winnerSummary = buildWinnerSummary(ablationQueue);
+    const response = await fetch("/api/experiments/winner", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        experimentName: name,
+        variantId: best.id,
+        label: best.label,
+        project: best.project,
+        metrics: best.metrics,
+        diagnostics: best.metrics.diagnostics ?? null,
+        report: { winnerSummary, rows: reportRows },
+        manifest: {
+          topologyDiff: buildTopologyDiff(enhancedFiveBlockTopology, best.project),
+          trainSettings: settingsFromMetrics(best.metrics, trainSettings),
+        },
+      }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      setNotice({ tone: "bad", text: payload?.error ?? "Could not lock winner." });
+      return;
+    }
+    setNotice({ tone: "good", text: `Winner locked at ${payload.winner?.directory ?? `experiments/${name}/winner`}.` });
+    await loadExperiments();
   }
 
   async function saveExperimentSnapshot(queue = ablationQueue) {
@@ -904,6 +1013,7 @@ export default function Home() {
         trainingBusy={trainingBusy}
         activeRunId={activeRunId}
         logs={trainingLogs}
+        replayComparison={replayComparison}
         runHistory={runHistory}
         runsBusy={runsBusy}
         selectedRunId={selectedRunId}
@@ -922,6 +1032,10 @@ export default function Home() {
         onLoadExperiment={loadSavedExperiment}
         onSaveExperiment={() => void saveExperimentSnapshot()}
         onLoadBest={loadBestVariant}
+        onExportBundle={exportRunBundle}
+        onReplayRun={replayCurrentRun}
+        onReplayBest={replayBestVariant}
+        onLockWinner={() => void lockWinner()}
         onRefresh={refreshTrainingState}
         onRun={runGeneratedTraining}
         onBuildQueue={buildAblationQueue}
@@ -1165,6 +1279,7 @@ function GeneratedTrainingPanel({
   trainingBusy,
   activeRunId,
   logs,
+  replayComparison,
   runHistory,
   runsBusy,
   selectedRunId,
@@ -1183,6 +1298,10 @@ function GeneratedTrainingPanel({
   onLoadExperiment,
   onSaveExperiment,
   onLoadBest,
+  onExportBundle,
+  onReplayRun,
+  onReplayBest,
+  onLockWinner,
   onRefresh,
   onRun,
   onBuildQueue,
@@ -1199,6 +1318,7 @@ function GeneratedTrainingPanel({
   trainingBusy: boolean;
   activeRunId: string | null;
   logs: string[];
+  replayComparison: ReplayComparison;
   runHistory: GeneratedRunSummary[];
   runsBusy: boolean;
   selectedRunId: string | null;
@@ -1217,6 +1337,10 @@ function GeneratedTrainingPanel({
   onLoadExperiment: (name: string) => void;
   onSaveExperiment: () => void;
   onLoadBest: () => void;
+  onExportBundle: () => void;
+  onReplayRun: () => void;
+  onReplayBest: () => void;
+  onLockWinner: () => void;
   onRefresh: () => void;
   onRun: () => void;
   onBuildQueue: () => void;
@@ -1280,6 +1404,14 @@ function GeneratedTrainingPanel({
           <button type="button" onClick={onStopQueue} disabled={!trainingBusy && !queueBusy}>
             <XCircle size={16} />
             Stop
+          </button>
+          <button type="button" onClick={onReplayRun} disabled={trainingBusy || queueBusy || !displayedMetrics}>
+            <RefreshCw size={16} />
+            Replay
+          </button>
+          <button type="button" onClick={onExportBundle} disabled={!displayedMetrics}>
+            <Download size={16} />
+            Bundle
           </button>
           <button type="button" onClick={onRefresh} disabled={metricsBusy || trainingBusy}>
             <RefreshCw size={16} />
@@ -1425,6 +1557,9 @@ function GeneratedTrainingPanel({
         resolution={currentResolution}
         diff={topologyDiff}
         winnerSummary={winnerSummary}
+        replayComparison={replayComparison}
+        onReplayBest={onReplayBest}
+        onLockWinner={onLockWinner}
       />
       <QueueToolbar
         preset={queuePreset}
@@ -1634,6 +1769,9 @@ function TraceabilityPanel({
   resolution,
   diff,
   winnerSummary,
+  replayComparison,
+  onReplayBest,
+  onLockWinner,
 }: {
   topologyId: string;
   metrics: GeneratedTrainMetrics;
@@ -1641,6 +1779,9 @@ function TraceabilityPanel({
   resolution: ReturnType<typeof resolveTopology>;
   diff: TopologyDiff;
   winnerSummary: WinnerSummary | null;
+  replayComparison: ReplayComparison;
+  onReplayBest: () => void;
+  onLockWinner: () => void;
 }) {
   return (
     <div className="traceabilityPanel">
@@ -1693,12 +1834,34 @@ function TraceabilityPanel({
               <strong>{winnerSummary.title}</strong>
               <span>{winnerSummary.detail}</span>
               <small>{winnerSummary.diffSummary}</small>
+              <div className="winnerActions">
+                <button type="button" onClick={onReplayBest}>
+                  <RefreshCw size={14} />
+                  Replay best
+                </button>
+                <button type="button" onClick={onLockWinner}>
+                  <Save size={14} />
+                  Lock winner
+                </button>
+              </div>
             </div>
           ) : (
             <p className="traceabilityEmpty">Run a queue to compare variants against the current baseline.</p>
           )}
         </div>
       </div>
+      {replayComparison ? (
+        <div className={`replayComparison ${replayComparison.reproducible ? "good" : "bad"}`}>
+          <strong>{replayComparison.reproducible ? "Replay reproducible" : "Replay drifted"}</strong>
+          <span>
+            Accuracy {formatMaybePercent(replayComparison.originalAccuracy)}{" -> "}{formatMaybePercent(replayComparison.replayAccuracy)}
+            {" / "}loss {formatMaybeNumber(replayComparison.originalLoss)}{" -> "}{formatMaybeNumber(replayComparison.replayLoss)}
+          </span>
+          <small>
+            {replayComparison.originalRunId} replayed as {replayComparison.replayRunId}; delta {formatMaybeSignedPercent(replayComparison.accuracyDelta)} accuracy, {formatMaybeNumber(replayComparison.lossDelta)} loss.
+          </small>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2131,6 +2294,78 @@ function buildWinnerSummary(queue: AblationQueueItem[]): WinnerSummary | null {
     title: `${best.label} is best at ${formatMaybePercent(bestAccuracy)}`,
     detail: `${accuracyText}; params ${formatDeltaCompact(diff.paramsDelta)}, FLOPs ${formatDeltaCompact(diff.flopsDelta)}.`,
     diffSummary: diff.summaryText,
+  };
+}
+
+function settingsFromMetrics(metrics: NonNullable<GeneratedTrainMetrics>, fallback: TrainSettings): TrainSettings {
+  return {
+    preset: "custom",
+    epochs: metrics.epochs ?? fallback.epochs,
+    trainLimit: metrics.train_limit ?? fallback.trainLimit,
+    testLimit: metrics.test_limit ?? fallback.testLimit,
+    batchSize: metrics.batch_size ?? fallback.batchSize,
+    learningRate: metrics.learning_rate ?? fallback.learningRate,
+    seed: metrics.seed ?? fallback.seed,
+    cpu: fallback.cpu,
+  };
+}
+
+function compareReplay(originalRunId: string, replayRunId: string, original: NonNullable<GeneratedTrainMetrics>, replay: GeneratedTrainMetrics): NonNullable<ReplayComparison> {
+  const originalAccuracy = original.best_accuracy ?? original.test_accuracy ?? null;
+  const replayAccuracy = replay?.best_accuracy ?? replay?.test_accuracy ?? null;
+  const originalLoss = original.test_loss ?? null;
+  const replayLoss = replay?.test_loss ?? null;
+  const accuracyDelta = typeof originalAccuracy === "number" && typeof replayAccuracy === "number" ? replayAccuracy - originalAccuracy : null;
+  const lossDelta = typeof originalLoss === "number" && typeof replayLoss === "number" ? replayLoss - originalLoss : null;
+  const reproducible =
+    typeof accuracyDelta === "number" &&
+    typeof lossDelta === "number" &&
+    Math.abs(accuracyDelta) <= 0.005 &&
+    Math.abs(lossDelta) <= 0.25;
+  return {
+    originalRunId,
+    replayRunId,
+    originalAccuracy,
+    replayAccuracy,
+    originalLoss,
+    replayLoss,
+    accuracyDelta,
+    lossDelta,
+    reproducible,
+  };
+}
+
+function buildRunBundle({
+  project,
+  metrics,
+  settings,
+  resolution,
+  diff,
+  generatedFiles,
+  queue,
+}: {
+  project: TopologyProject;
+  metrics: GeneratedTrainMetrics;
+  settings: TrainSettings;
+  resolution: ReturnType<typeof resolveTopology>;
+  diff: TopologyDiff;
+  generatedFiles: GeneratedFile[];
+  queue: AblationQueueItem[];
+}) {
+  return {
+    exportedAt: new Date().toISOString(),
+    topology: project,
+    generatedFiles,
+    trainSettings: metrics ? settingsFromMetrics(metrics, settings) : settings,
+    metrics,
+    diagnostics: metrics?.diagnostics ?? null,
+    manifest: {
+      topologyId: topologyVersionId(project),
+      params: resolution.totalParameters,
+      flops: resolution.totalFlops,
+      diff,
+      winnerSummary: buildWinnerSummary(queue),
+    },
   };
 }
 

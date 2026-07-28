@@ -1,0 +1,240 @@
+{
+  "name": "Enhanced Five-Block MNIST V1",
+  "version": "0.1.0",
+  "inputShape": [
+    "B",
+    1,
+    28,
+    28
+  ],
+  "nodes": [
+    {
+      "id": "input",
+      "name": "MNIST image",
+      "kind": "input",
+      "description": "Single-channel 28 x 28 digit image.",
+      "position": {
+        "x": 60,
+        "y": 82
+      },
+      "parameters": {
+        "channels": 1,
+        "height": 28,
+        "width": 28
+      }
+    },
+    {
+      "id": "stem",
+      "name": "Stem",
+      "kind": "conv_bn_gelu",
+      "description": "3 x 3 convolution with batch norm and GELU.",
+      "position": {
+        "x": 260,
+        "y": 82
+      },
+      "parameters": {
+        "out_channels": 32,
+        "kernel_size": 3,
+        "stride": 1,
+        "padding": 1
+      }
+    },
+    {
+      "id": "block1",
+      "name": "Block 1",
+      "kind": "multi_branch_residual",
+      "description": "Four-branch residual block.",
+      "position": {
+        "x": 460,
+        "y": 82
+      },
+      "parameters": {
+        "out_channels": 48,
+        "stride": 1,
+        "branch_count": 4,
+        "use_se": false,
+        "se_reduction": 8,
+        "drop_path": 0
+      }
+    },
+    {
+      "id": "block2",
+      "name": "Block 2",
+      "kind": "multi_branch_residual",
+      "description": "Downsampling four-branch residual block.",
+      "position": {
+        "x": 660,
+        "y": 82
+      },
+      "parameters": {
+        "out_channels": 80,
+        "stride": 2,
+        "branch_count": 4,
+        "use_se": false,
+        "se_reduction": 8,
+        "drop_path": 0.01
+      }
+    },
+    {
+      "id": "block3",
+      "name": "Block 3",
+      "kind": "multi_branch_residual",
+      "description": "SE-enabled block with an auxiliary classifier output.",
+      "position": {
+        "x": 860,
+        "y": 82
+      },
+      "parameters": {
+        "out_channels": 96,
+        "stride": 1,
+        "branch_count": 4,
+        "use_se": true,
+        "se_reduction": 8,
+        "drop_path": 0.02
+      }
+    },
+    {
+      "id": "auxiliary_head",
+      "name": "Auxiliary head",
+      "kind": "auxiliary_classifier",
+      "description": "Auxiliary classifier attached to Block 3.",
+      "position": {
+        "x": 860,
+        "y": 244
+      },
+      "parameters": {
+        "classes": 10
+      }
+    },
+    {
+      "id": "block4",
+      "name": "Block 4",
+      "kind": "multi_branch_residual",
+      "description": "Second downsampling SE residual block.",
+      "position": {
+        "x": 1060,
+        "y": 82
+      },
+      "parameters": {
+        "out_channels": 144,
+        "stride": 2,
+        "branch_count": 4,
+        "use_se": true,
+        "se_reduction": 8,
+        "drop_path": 0.03
+      }
+    },
+    {
+      "id": "block5",
+      "name": "Block 5",
+      "kind": "multi_branch_residual",
+      "description": "Final SE residual block before pooling.",
+      "position": {
+        "x": 1260,
+        "y": 82
+      },
+      "parameters": {
+        "out_channels": 160,
+        "stride": 1,
+        "branch_count": 4,
+        "use_se": true,
+        "se_reduction": 8,
+        "drop_path": 0.05
+      }
+    },
+    {
+      "id": "pooling",
+      "name": "GAP + GMP",
+      "kind": "pooling_fusion",
+      "description": "Global average and max pooling concatenated into one vector.",
+      "position": {
+        "x": 1460,
+        "y": 82
+      },
+      "parameters": {
+        "mode": "gap_gmp"
+      }
+    },
+    {
+      "id": "feature_head",
+      "name": "Feature head",
+      "kind": "feature_head",
+      "description": "Projection to a reusable ensemble embedding.",
+      "position": {
+        "x": 1660,
+        "y": 82
+      },
+      "parameters": {
+        "hidden_features": 192,
+        "embedding_features": 128,
+        "dropout": 0.2
+      }
+    },
+    {
+      "id": "classifier",
+      "name": "Classifier",
+      "kind": "classifier",
+      "description": "Final ten-class digit classifier.",
+      "position": {
+        "x": 1860,
+        "y": 82
+      },
+      "parameters": {
+        "classes": 10
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "input_stem",
+      "source": "input",
+      "target": "stem"
+    },
+    {
+      "id": "stem_block1",
+      "source": "stem",
+      "target": "block1"
+    },
+    {
+      "id": "block1_block2",
+      "source": "block1",
+      "target": "block2"
+    },
+    {
+      "id": "block2_block3",
+      "source": "block2",
+      "target": "block3"
+    },
+    {
+      "id": "block3_aux",
+      "source": "block3",
+      "target": "auxiliary_head",
+      "branch": "auxiliary"
+    },
+    {
+      "id": "block3_block4",
+      "source": "block3",
+      "target": "block4"
+    },
+    {
+      "id": "block4_block5",
+      "source": "block4",
+      "target": "block5"
+    },
+    {
+      "id": "block5_pooling",
+      "source": "block5",
+      "target": "pooling"
+    },
+    {
+      "id": "pooling_feature_head",
+      "source": "pooling",
+      "target": "feature_head"
+    },
+    {
+      "id": "feature_head_classifier",
+      "source": "feature_head",
+      "target": "classifier"
+    }
+  ]
+}

@@ -5,7 +5,7 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 
 import { generateFiles } from "@/lib/codegen";
-import { parseTopologyProject } from "@/lib/topology";
+import { parseTopologyProject, type TopologyProject } from "@/lib/topology";
 import { topologyVersionId } from "@/lib/topologyVersion";
 
 export const dynamic = "force-dynamic";
@@ -101,6 +101,8 @@ export async function POST(request: Request) {
   const generatedFiles = generateFiles(parsed.project);
   await writeGeneratedFiles(generatedDir, generatedFiles);
   await writeGeneratedFiles(runDir, generatedFiles);
+  await writeProjectJson(generatedDir, parsed.project);
+  await writeProjectJson(runDir, parsed.project);
 
   const epochs = clampInt(payload.epochs, 1, 5, 1);
   const trainLimit = clampInt(payload.trainLimit, 128, 10_000, 1024);
@@ -117,6 +119,7 @@ export async function POST(request: Request) {
     epochs,
     train_limit: trainLimit,
     test_limit: testLimit,
+    batch_size: batchSize,
     seed,
     learning_rate: learningRate,
     current_epoch: 0,
@@ -289,6 +292,10 @@ async function writeGeneratedFiles(outputDir: string, files: ReturnType<typeof g
   for (const file of files) {
     await writeFile(path.join(outputDir, file.path), file.content.endsWith("\n") ? file.content : `${file.content}\n`, "utf8");
   }
+}
+
+async function writeProjectJson(outputDir: string, project: TopologyProject) {
+  await writeFile(path.join(outputDir, "project.json"), JSON.stringify(project, null, 2), "utf8");
 }
 
 async function readJson(filePath: string) {

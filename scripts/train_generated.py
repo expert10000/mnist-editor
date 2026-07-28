@@ -35,6 +35,7 @@ class TrainMetrics:
     epochs: int
     train_limit: int
     test_limit: int
+    batch_size: int
     seed: int
     learning_rate: float
     current_epoch: int
@@ -200,6 +201,7 @@ def train(args: argparse.Namespace) -> TrainMetrics:
         "epochs": args.epochs,
         "train_limit": args.train_limit,
         "test_limit": args.test_limit,
+        "batch_size": args.batch_size,
         "seed": args.seed,
         "learning_rate": args.lr,
         "current_epoch": 0,
@@ -389,6 +391,7 @@ def train(args: argparse.Namespace) -> TrainMetrics:
         epochs=args.epochs,
         train_limit=args.train_limit,
         test_limit=args.test_limit,
+        batch_size=args.batch_size,
         seed=args.seed,
         learning_rate=args.lr,
         current_epoch=args.epochs,

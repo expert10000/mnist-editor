@@ -19,6 +19,8 @@ async function main() {
   const files = generateFiles(enhancedFiveBlockTopology);
   await writeGeneratedFiles(generatedDir, files);
   await writeGeneratedFiles(runDir, files);
+  await writeFile(path.join(generatedDir, "project.json"), JSON.stringify(enhancedFiveBlockTopology, null, 2), "utf8");
+  await writeFile(path.join(runDir, "project.json"), JSON.stringify(enhancedFiveBlockTopology, null, 2), "utf8");
   await writeFile(logPath, `run ${runId} queued\n`, "utf8");
 
   const args = [

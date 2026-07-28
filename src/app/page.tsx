@@ -286,6 +286,8 @@ export default function Home() {
   const generatedFiles = useMemo(() => generateFiles(project), [project]);
   const selectedGeneratedFile = generatedFiles.find((file) => file.path === selectedGeneratedPath) ?? generatedFiles[0];
   const currentTopologyId = useMemo(() => topologyVersionId(project), [project]);
+  const selectedArchitecture = architectures.find((architecture) => architecture.id === selectedArchitectureId);
+  const canvasMatchesSelectedArchitecture = selectedArchitecture ? selectedArchitecture.topologyId === currentTopologyId : false;
   const branchRepair = getBranchRepair(selectedNode);
   const boardSize = useMemo(() => getBoardSize(project.nodes), [project.nodes]);
 
@@ -1348,12 +1350,35 @@ export default function Home() {
       <section className="workspace">
         <aside className="libraryPanel" aria-label="Node library">
           <div className="panelHeader">
-            <strong>Templates</strong>
+            <strong>Current architecture</strong>
             <BrainCircuit size={18} />
           </div>
-          <button className="templateButton active" type="button" onClick={restoreTemplate}>
-            <strong>Enhanced Five-Block MNIST V1</strong>
-            <span>5 residual blocks / auxiliary head / GAP + GMP / 128D embedding</span>
+          <div className={`templateCard active ${canvasMatchesSelectedArchitecture ? "" : "dirty"}`}>
+            <strong>{project.name}</strong>
+            <span>{topologySummary(project, resolution)}</span>
+            <div className="architectureMiniGrid">
+              <span>
+                Topology
+                <strong>{currentTopologyId}</strong>
+              </span>
+              <span>
+                Source
+                <strong>{selectedArchitecture?.locked ? "built-in" : selectedArchitecture ? "saved" : "canvas"}</strong>
+              </span>
+              <span>
+                Params
+                <strong>{formatCompactNumber(resolution.totalParameters)}</strong>
+              </span>
+              <span>
+                Status
+                <strong>{canvasMatchesSelectedArchitecture ? "matched" : "edited"}</strong>
+              </span>
+            </div>
+            {selectedArchitecture?.notes ? <small>{selectedArchitecture.notes}</small> : null}
+          </div>
+          <button className="restoreButton" type="button" onClick={restoreTemplate}>
+            <RefreshCw size={15} />
+            Load baseline
           </button>
           <div className="nodePalette" aria-label="Add nodes">
             <button type="button" onClick={() => addNode("multi_branch_residual")}>
@@ -3390,6 +3415,13 @@ function formatRunLabel(runId: string) {
     return runId;
   }
   return `${timestamp.slice(4, 6)}/${timestamp.slice(6, 8)} ${timestamp.slice(9, 11)}:${timestamp.slice(11, 13)}`;
+}
+
+function topologySummary(project: TopologyProject, resolution: ReturnType<typeof resolveTopology>) {
+  const pooling = project.nodes.find((node) => node.kind === "pooling_fusion");
+  const poolingLabel = pooling?.parameters.mode === "gap" ? "GAP" : "GAP + GMP";
+  const auxLabel = resolution.auxiliaryHeads === 1 ? "1 aux head" : `${resolution.auxiliaryHeads} aux heads`;
+  return `${resolution.residualPaths} residual blocks / ${auxLabel} / ${poolingLabel} / ${resolution.embeddingDimension ?? "-"}D embedding`;
 }
 
 function formatShortDate(value: string) {

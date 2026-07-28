@@ -182,6 +182,20 @@ type ExperimentSession = {
   queue: AblationQueueItem[];
   reportRows: ReturnType<typeof buildQueueReportRows>;
 };
+type ArchitectureSummary = {
+  id: string;
+  name: string;
+  notes: string;
+  tags: string[];
+  parentId: string;
+  topologyId: string;
+  params: number;
+  flops: number;
+  createdAt: string;
+  updatedAt: string;
+  archived: boolean;
+  project: TopologyProject;
+};
 type AblationQueueItem = {
   id: string;
   label: string;
@@ -242,6 +256,9 @@ export default function Home() {
   const [savedExperiments, setSavedExperiments] = useState<ExperimentSummary[]>([]);
   const [selectedExperimentName, setSelectedExperimentName] = useState("");
   const [experimentsBusy, setExperimentsBusy] = useState(false);
+  const [architectures, setArchitectures] = useState<ArchitectureSummary[]>([]);
+  const [selectedArchitectureId, setSelectedArchitectureId] = useState("baseline-fiveblock");
+  const [architectureBusy, setArchitectureBusy] = useState(false);
   const [trainSettings, setTrainSettings] = useState<TrainSettings>({
     preset: "balanced",
     ...RUN_PRESETS.balanced,
@@ -304,11 +321,27 @@ export default function Home() {
     }
   }, []);
 
+  const loadArchitectures = useCallback(async () => {
+    setArchitectureBusy(true);
+    try {
+      const response = await fetch("/api/architectures", { cache: "no-store" });
+      const payload = await response.json();
+      const nextArchitectures = Array.isArray(payload.architectures) ? payload.architectures : [];
+      setArchitectures(nextArchitectures);
+      if (!nextArchitectures.some((architecture: ArchitectureSummary) => architecture.id === selectedArchitectureId)) {
+        setSelectedArchitectureId(nextArchitectures[0]?.id ?? "baseline-fiveblock");
+      }
+    } finally {
+      setArchitectureBusy(false);
+    }
+  }, [selectedArchitectureId]);
+
   useEffect(() => {
     void loadGeneratedMetrics();
     void loadGeneratedRuns();
     void loadExperiments();
-  }, [loadExperiments, loadGeneratedMetrics, loadGeneratedRuns]);
+    void loadArchitectures();
+  }, [loadArchitectures, loadExperiments, loadGeneratedMetrics, loadGeneratedRuns]);
 
   useEffect(() => {
     if (!trainingBusy || !activeRunId || queueBusy) {
@@ -486,6 +519,109 @@ export default function Home() {
       setSelectedNodeId(nextSelected);
     }
     setNotice({ tone: "good", text: `${label} promoted to the canvas.` });
+  }
+
+  async function loadArchitecture(id: string) {
+    const architecture = architectures.find((item) => item.id === id);
+    if (!architecture) {
+      setNotice({ tone: "bad", text: "Architecture not found in the library." });
+      return;
+    }
+    setSelectedArchitectureId(id);
+    setHistory({ past: [], present: architecture.project, future: [] });
+    setSelectedNodeId(architecture.project.nodes.some((node) => node.id === selectedNodeId) ? selectedNodeId : architecture.project.nodes[0]?.id ?? "input");
+    setAblationQueue([]);
+    setSelectedRunId(null);
+    setNotice({ tone: "good", text: `Loaded ${architecture.name}.` });
+  }
+
+  async function saveCurrentArchitecture() {
+    const name = window.prompt("Architecture name", project.name);
+    if (!name?.trim()) {
+      return;
+    }
+    const notes = window.prompt("Notes", "") ?? "";
+    const response = await fetch("/api/architectures", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        notes,
+        tags: ["saved"],
+        parentId: selectedArchitectureId,
+        project: { ...project, name },
+      }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      setNotice({ tone: "bad", text: payload?.error ?? "Could not save architecture." });
+      return;
+    }
+    await loadArchitectures();
+    setSelectedArchitectureId(payload.architecture.id);
+    setHistory({ past: [], present: payload.architecture.project, future: [] });
+    setAblationQueue([]);
+    setSelectedRunId(null);
+    setNotice({ tone: "good", text: `Saved architecture ${payload.architecture.name}.` });
+  }
+
+  async function duplicateArchitecture() {
+    const current = architectures.find((item) => item.id === selectedArchitectureId);
+    const name = window.prompt("Duplicate architecture as", `${project.name} copy`);
+    if (!name?.trim()) {
+      return;
+    }
+    const response = await fetch("/api/architectures", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        notes: current?.notes ? `Duplicate of ${current.name}. ${current.notes}` : `Duplicate of ${current?.name ?? project.name}.`,
+        tags: [...(current?.tags ?? []), "duplicate"],
+        parentId: current?.id ?? selectedArchitectureId,
+        sourceId: current?.id ?? selectedArchitectureId,
+        project: { ...project, name },
+      }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      setNotice({ tone: "bad", text: payload?.error ?? "Could not duplicate architecture." });
+      return;
+    }
+    await loadArchitectures();
+    setSelectedArchitectureId(payload.architecture.id);
+    setHistory({ past: [], present: payload.architecture.project, future: [] });
+    setAblationQueue([]);
+    setSelectedRunId(null);
+    setNotice({ tone: "good", text: `Duplicated as ${payload.architecture.name}.` });
+  }
+
+  async function archiveArchitecture() {
+    if (selectedArchitectureId === "baseline-fiveblock") {
+      setNotice({ tone: "bad", text: "The built-in baseline cannot be archived." });
+      return;
+    }
+    const current = architectures.find((item) => item.id === selectedArchitectureId);
+    if (!current) {
+      return;
+    }
+    const confirmed = window.confirm(`Archive ${current.name}?`);
+    if (!confirmed) {
+      return;
+    }
+    const response = await fetch(`/api/architectures?id=${encodeURIComponent(selectedArchitectureId)}`, { method: "DELETE" });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      setNotice({ tone: "bad", text: payload?.error ?? "Could not archive architecture." });
+      return;
+    }
+    await loadArchitectures();
+    const baseline = architectures.find((item) => item.id === "baseline-fiveblock");
+    if (baseline) {
+      setHistory({ past: [], present: baseline.project, future: [] });
+    }
+    setSelectedArchitectureId("baseline-fiveblock");
+    setNotice({ tone: "good", text: `${current.name} archived.` });
   }
 
   function buildAblationQueue() {
@@ -1073,6 +1209,38 @@ export default function Home() {
           <p className="eyebrow">MNIST topology compiler</p>
           <h1>{project.name}</h1>
         </div>
+        <div className="architectureTopbar">
+          <label>
+            <span>Architecture</span>
+            <select value={selectedArchitectureId} onChange={(event) => void loadArchitecture(event.target.value)} disabled={architectureBusy}>
+              {architectures.map((architecture) => (
+                <option key={architecture.id} value={architecture.id}>
+                  {architecture.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="topologyIdPill" title={currentTopologyId}>
+            ID {currentTopologyId}
+          </span>
+          <button type="button" onClick={() => void saveCurrentArchitecture()} disabled={architectureBusy} title="Save current topology as a library architecture">
+            <Save size={16} />
+            Save new
+          </button>
+          <button type="button" onClick={() => void duplicateArchitecture()} disabled={architectureBusy} title="Duplicate selected architecture">
+            <Plus size={16} />
+            Duplicate
+          </button>
+          <button
+            type="button"
+            onClick={() => void archiveArchitecture()}
+            disabled={architectureBusy || selectedArchitectureId === "baseline-fiveblock"}
+            title="Archive selected saved architecture"
+          >
+            <Trash2 size={16} />
+            Archive
+          </button>
+        </div>
         <div className="topbarActions">
           <button className="iconButton" type="button" onClick={undo} disabled={history.past.length === 0} title="Undo" aria-label="Undo">
             <Undo2 size={18} />
@@ -1117,6 +1285,18 @@ export default function Home() {
           tone={resolution.errors.length === 0 ? "good" : "bad"}
         />
       </section>
+
+      <ArchitectureLibraryPanel
+        architectures={architectures}
+        selectedId={selectedArchitectureId}
+        runHistory={runHistory}
+        currentTopologyId={currentTopologyId}
+        busy={architectureBusy}
+        onLoad={(id) => void loadArchitecture(id)}
+        onSave={() => void saveCurrentArchitecture()}
+        onDuplicate={() => void duplicateArchitecture()}
+        onArchive={() => void archiveArchitecture()}
+      />
 
       <GeneratedTrainingPanel
         project={project}
@@ -1386,6 +1566,116 @@ export default function Home() {
         ) : null}
       </section>
     </main>
+  );
+}
+
+function ArchitectureLibraryPanel({
+  architectures,
+  selectedId,
+  runHistory,
+  currentTopologyId,
+  busy,
+  onLoad,
+  onSave,
+  onDuplicate,
+  onArchive,
+}: {
+  architectures: ArchitectureSummary[];
+  selectedId: string;
+  runHistory: GeneratedRunSummary[];
+  currentTopologyId: string;
+  busy: boolean;
+  onLoad: (id: string) => void;
+  onSave: () => void;
+  onDuplicate: () => void;
+  onArchive: () => void;
+}) {
+  const selectedArchitecture = architectures.find((architecture) => architecture.id === selectedId);
+  const canvasMatchesSelected = selectedArchitecture ? selectedArchitecture.topologyId === currentTopologyId : true;
+
+  return (
+    <section className="architectureLibraryPanel" aria-label="Architecture library">
+      <div className="architectureLibraryHeader">
+        <div>
+          <p className="eyebrow">Architecture library</p>
+          <h2>Saved working architectures</h2>
+        </div>
+        <div className="architectureLibraryActions">
+          <button type="button" onClick={onSave} disabled={busy}>
+            <Save size={16} />
+            Save current
+          </button>
+          <button type="button" onClick={onDuplicate} disabled={busy}>
+            <Plus size={16} />
+            Duplicate
+          </button>
+          <button type="button" onClick={onArchive} disabled={busy || selectedId === "baseline-fiveblock"}>
+            <Trash2 size={16} />
+            Archive
+          </button>
+        </div>
+      </div>
+      <div className="architectureHomeGrid">
+        <div>
+          <span>Current architecture</span>
+          <strong>{selectedArchitecture?.name ?? "Unsaved canvas"}</strong>
+          <small>{canvasMatchesSelected ? "canvas matches library topology" : "canvas has unsaved topology changes"}</small>
+        </div>
+        <div>
+          <span>Topology ID</span>
+          <strong>{currentTopologyId}</strong>
+          <small>{selectedArchitecture?.parentId ? `parent ${selectedArchitecture.parentId}` : "baseline parent"}</small>
+        </div>
+        <div>
+          <span>Best run</span>
+          <strong>{formatMaybePercent(architectureRunStats(selectedArchitecture, runHistory).bestAccuracy)}</strong>
+          <small>{architectureRunStats(selectedArchitecture, runHistory).bestRunId ? formatRunLabel(architectureRunStats(selectedArchitecture, runHistory).bestRunId ?? "") : "no saved run yet"}</small>
+        </div>
+        <div>
+          <span>Latest replay</span>
+          <strong>{latestReplayStatusForTopology(currentTopologyId, runHistory)}</strong>
+          <small>from saved run history</small>
+        </div>
+      </div>
+      <div className="architectureLibraryGrid">
+        {architectures.map((architecture) => {
+          const stats = architectureRunStats(architecture, runHistory);
+          const selected = architecture.id === selectedId;
+          return (
+            <button className={`architectureCard ${selected ? "selected" : ""}`} key={architecture.id} type="button" onClick={() => onLoad(architecture.id)} disabled={busy}>
+              <span className="architectureCardTitle">
+                <strong>{architecture.name}</strong>
+                {selected ? <CheckCircle2 size={17} /> : <FolderOpen size={17} />}
+              </span>
+              <span className="architectureCardNotes">{architecture.notes || "No notes yet."}</span>
+              <span className="architectureTagRow">
+                {architecture.tags.slice(0, 3).map((tag) => (
+                  <small key={tag}>{tag}</small>
+                ))}
+              </span>
+              <span className="architectureStats">
+                <span>
+                  Params
+                  <strong>{formatCompactNumber(architecture.params)}</strong>
+                </span>
+                <span>
+                  FLOPs
+                  <strong>{formatCompactNumber(architecture.flops)}</strong>
+                </span>
+                <span>
+                  Best
+                  <strong>{formatMaybePercent(stats.bestAccuracy)}</strong>
+                </span>
+                <span>
+                  Last trained
+                  <strong>{stats.lastTrained ? formatShortDate(stats.lastTrained) : "-"}</strong>
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -3098,6 +3388,46 @@ function formatRunLabel(runId: string) {
     return runId;
   }
   return `${timestamp.slice(4, 6)}/${timestamp.slice(6, 8)} ${timestamp.slice(9, 11)}:${timestamp.slice(11, 13)}`;
+}
+
+function formatShortDate(value: string) {
+  if (value === "builtin") {
+    return "built-in";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function architectureRunStats(architecture: ArchitectureSummary | undefined, runHistory: GeneratedRunSummary[]) {
+  if (!architecture) {
+    return { bestAccuracy: null, bestRunId: null, lastTrained: null };
+  }
+  const runs = runHistory.filter((run) => run.topologyId === architecture.topologyId || run.metrics.topology_id === architecture.topologyId);
+  const best = runs
+    .filter((run) => typeof (run.metrics.best_accuracy ?? run.metrics.test_accuracy) === "number")
+    .sort((left, right) => (right.metrics.best_accuracy ?? right.metrics.test_accuracy ?? -1) - (left.metrics.best_accuracy ?? left.metrics.test_accuracy ?? -1))[0];
+  const latest = runs
+    .map((run) => run.updatedAt ?? run.metrics.updated_at ?? run.createdAt ?? run.metrics.created_at ?? "")
+    .filter(Boolean)
+    .sort((left, right) => right.localeCompare(left))[0];
+  return {
+    bestAccuracy: best?.metrics.best_accuracy ?? best?.metrics.test_accuracy ?? null,
+    bestRunId: best?.runId ?? null,
+    lastTrained: latest ?? null,
+  };
+}
+
+function latestReplayStatusForTopology(topologyId: string, runHistory: GeneratedRunSummary[]) {
+  const replayRun = runHistory
+    .filter((run) => (run.topologyId === topologyId || run.metrics.topology_id === topologyId) && run.metrics.replay_comparison)
+    .sort((left, right) => (right.updatedAt ?? right.metrics.updated_at ?? "").localeCompare(left.updatedAt ?? left.metrics.updated_at ?? ""))[0];
+  if (!replayRun?.metrics.replay_comparison) {
+    return "none";
+  }
+  return replayRun.metrics.replay_comparison.reproducible ? "reproducible" : "drifted";
 }
 
 function createNode(kind: Extract<NodeKind, "multi_branch_residual" | "auxiliary_classifier" | "feature_head">, id: string, position: TopologyNode["position"]): TopologyNode {

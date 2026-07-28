@@ -12,3 +12,5 @@ runs/*
 !runs/.gitkeep
 experiments/*
 !experiments/.gitkeep
+architectures/*
+!architectures/.gitkeep

@@ -204,6 +204,26 @@ type ArchitectureCompareResult = {
   error?: string;
   updatedAt?: string;
 };
+type ComparisonSummary = {
+  name: string;
+  displayName?: string;
+  updatedAt: string;
+  winnerArchitectureId: string;
+  architectureCount: number;
+  bestAccuracy: number | null;
+};
+type ComparisonSession = {
+  name: string;
+  displayName?: string;
+  createdAt: string;
+  updatedAt: string;
+  selectedArchitectureIds: string[];
+  trainSettings: TrainSettings | null;
+  results: Record<string, ArchitectureCompareResult>;
+  winnerArchitectureId: string;
+  winnerSummary: Record<string, unknown> | null;
+  reportRows: ReturnType<typeof buildArchitectureCompareReportRows>;
+};
 type AblationQueueItem = {
   id: string;
   label: string;
@@ -270,6 +290,10 @@ export default function Home() {
   const [compareArchitectureIds, setCompareArchitectureIds] = useState<string[]>(["baseline-fiveblock", "preset-compact-five-block", "preset-wide-se"]);
   const [architectureCompareResults, setArchitectureCompareResults] = useState<Record<string, ArchitectureCompareResult>>({});
   const [architectureCompareBusy, setArchitectureCompareBusy] = useState(false);
+  const [comparisonName, setComparisonName] = useState("arch-family-fast-001");
+  const [savedComparisons, setSavedComparisons] = useState<ComparisonSummary[]>([]);
+  const [selectedComparisonName, setSelectedComparisonName] = useState("");
+  const [comparisonsBusy, setComparisonsBusy] = useState(false);
   const [trainSettings, setTrainSettings] = useState<TrainSettings>({
     preset: "balanced",
     ...RUN_PRESETS.balanced,
@@ -349,12 +373,24 @@ export default function Home() {
     }
   }, [selectedArchitectureId]);
 
+  const loadComparisons = useCallback(async () => {
+    setComparisonsBusy(true);
+    try {
+      const response = await fetch("/api/comparisons", { cache: "no-store" });
+      const payload = await response.json();
+      setSavedComparisons(Array.isArray(payload.comparisons) ? payload.comparisons : []);
+    } finally {
+      setComparisonsBusy(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadGeneratedMetrics();
     void loadGeneratedRuns();
     void loadExperiments();
     void loadArchitectures();
-  }, [loadArchitectures, loadExperiments, loadGeneratedMetrics, loadGeneratedRuns]);
+    void loadComparisons();
+  }, [loadArchitectures, loadComparisons, loadExperiments, loadGeneratedMetrics, loadGeneratedRuns]);
 
   useEffect(() => {
     if (!trainingBusy || !activeRunId || queueBusy) {
@@ -654,6 +690,13 @@ export default function Home() {
     });
   }
 
+  function clearArchitectureCompare() {
+    setCompareArchitectureIds([]);
+    setArchitectureCompareResults({});
+    setSelectedComparisonName("");
+    setNotice({ tone: "good", text: "Architecture comparison cleared." });
+  }
+
   async function runArchitectureCompare() {
     const selectedArchitectures = compareArchitectureIds.map((id) => architectures.find((architecture) => architecture.id === id)).filter((architecture): architecture is ArchitectureSummary => Boolean(architecture));
     if (selectedArchitectures.length < 2) {
@@ -705,6 +748,89 @@ export default function Home() {
       void loadGeneratedMetrics();
       void loadGeneratedRuns();
     }
+  }
+
+  async function saveComparisonSession() {
+    const selectedArchitectures = compareArchitectureIds.map((id) => architectures.find((architecture) => architecture.id === id)).filter((architecture): architecture is ArchitectureSummary => Boolean(architecture));
+    if (selectedArchitectures.length < 2) {
+      setNotice({ tone: "bad", text: "Select at least 2 architectures before saving a comparison." });
+      return;
+    }
+    const name = comparisonName.trim() || "arch-family-fast-001";
+    setComparisonName(name);
+    const rows = buildArchitectureCompareReportRows(selectedArchitectures, runHistory, architectureCompareResults, trainSettings);
+    const winner = bestArchitectureComparison(selectedArchitectures, runHistory, architectureCompareResults);
+    const selectedResults = Object.fromEntries(selectedArchitectures.map((architecture) => [architecture.id, architectureCompareResults[architecture.id]]).filter((entry): entry is [string, ArchitectureCompareResult] => Boolean(entry[1])));
+    const response = await fetch("/api/comparisons", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        selectedArchitectureIds: selectedArchitectures.map((architecture) => architecture.id),
+        trainSettings,
+        results: selectedResults,
+        winnerArchitectureId: winner?.id ?? "",
+        winnerSummary: winner ? buildArchitectureWinnerSummary(winner, selectedArchitectures, runHistory, architectureCompareResults, trainSettings) : null,
+        reportRows: rows,
+      }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      setNotice({ tone: "bad", text: payload?.error ?? "Could not save comparison session." });
+      return;
+    }
+    setSelectedComparisonName(payload.comparison?.name ?? name);
+    await loadComparisons();
+    setNotice({ tone: "good", text: `Comparison ${payload.comparison?.displayName ?? name} saved.` });
+  }
+
+  async function loadSavedComparison(name: string) {
+    setSelectedComparisonName(name);
+    if (!name) {
+      return;
+    }
+    setComparisonsBusy(true);
+    try {
+      const response = await fetch(`/api/comparisons?name=${encodeURIComponent(name)}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) {
+        setNotice({ tone: "bad", text: payload?.error ?? "Could not load comparison." });
+        return;
+      }
+      const comparison = hydrateComparisonSession(payload.comparison);
+      if (!comparison) {
+        setNotice({ tone: "bad", text: "Saved comparison is not readable." });
+        return;
+      }
+      setComparisonName(comparison.displayName ?? comparison.name);
+      setCompareArchitectureIds(comparison.selectedArchitectureIds);
+      setArchitectureCompareResults(comparison.results);
+      if (comparison.trainSettings) {
+        setTrainSettings(comparison.trainSettings);
+      }
+      setNotice({ tone: "good", text: `Loaded comparison ${comparison.displayName ?? comparison.name}.` });
+    } finally {
+      setComparisonsBusy(false);
+    }
+  }
+
+  function exportComparisonReport(format: "json" | "csv") {
+    const selectedArchitectures = compareArchitectureIds.map((id) => architectures.find((architecture) => architecture.id === id)).filter((architecture): architecture is ArchitectureSummary => Boolean(architecture));
+    const rows = buildArchitectureCompareReportRows(selectedArchitectures, runHistory, architectureCompareResults, trainSettings);
+    const winner = bestArchitectureComparison(selectedArchitectures, runHistory, architectureCompareResults);
+    const winnerSummary = winner ? buildArchitectureWinnerSummary(winner, selectedArchitectures, runHistory, architectureCompareResults, trainSettings) : null;
+    if (rows.length === 0) {
+      setNotice({ tone: "bad", text: "No architecture comparison to export yet." });
+      return;
+    }
+    const safeName = slugName(comparisonName || "architecture-comparison");
+    if (format === "json") {
+      downloadTextFile(`${safeName}-comparison.json`, JSON.stringify({ exportedAt: new Date().toISOString(), winnerSummary, rows }, null, 2), "application/json");
+      setNotice({ tone: "good", text: "Architecture comparison JSON exported." });
+      return;
+    }
+    downloadTextFile(`${safeName}-comparison.csv`, toArchitectureCompareCsv(rows), "text/csv");
+    setNotice({ tone: "good", text: "Architecture comparison CSV exported." });
   }
 
   function buildAblationQueue() {
@@ -1380,16 +1506,25 @@ export default function Home() {
         selectedId={selectedArchitectureId}
         compareIds={compareArchitectureIds}
         compareResults={architectureCompareResults}
+        comparisonName={comparisonName}
+        savedComparisons={savedComparisons}
+        selectedComparisonName={selectedComparisonName}
         runHistory={runHistory}
         currentTopologyId={currentTopologyId}
         busy={architectureBusy || architectureCompareBusy}
         compareBusy={architectureCompareBusy}
+        comparisonsBusy={comparisonsBusy}
         onLoad={(id) => void loadArchitecture(id)}
         onSave={() => void saveCurrentArchitecture()}
         onDuplicate={() => void duplicateArchitecture()}
         onArchive={() => void archiveArchitecture()}
         onToggleCompare={toggleCompareArchitecture}
         onRunCompare={() => void runArchitectureCompare()}
+        onComparisonNameChange={setComparisonName}
+        onLoadComparison={(name) => void loadSavedComparison(name)}
+        onSaveComparison={() => void saveComparisonSession()}
+        onExportComparison={exportComparisonReport}
+        onClearComparison={clearArchitectureCompare}
       />
 
       <GeneratedTrainingPanel
@@ -1691,31 +1826,49 @@ function ArchitectureLibraryPanel({
   selectedId,
   compareIds,
   compareResults,
+  comparisonName,
+  savedComparisons,
+  selectedComparisonName,
   runHistory,
   currentTopologyId,
   busy,
   compareBusy,
+  comparisonsBusy,
   onLoad,
   onSave,
   onDuplicate,
   onArchive,
   onToggleCompare,
   onRunCompare,
+  onComparisonNameChange,
+  onLoadComparison,
+  onSaveComparison,
+  onExportComparison,
+  onClearComparison,
 }: {
   architectures: ArchitectureSummary[];
   selectedId: string;
   compareIds: string[];
   compareResults: Record<string, ArchitectureCompareResult>;
+  comparisonName: string;
+  savedComparisons: ComparisonSummary[];
+  selectedComparisonName: string;
   runHistory: GeneratedRunSummary[];
   currentTopologyId: string;
   busy: boolean;
   compareBusy: boolean;
+  comparisonsBusy: boolean;
   onLoad: (id: string) => void;
   onSave: () => void;
   onDuplicate: () => void;
   onArchive: () => void;
   onToggleCompare: (id: string) => void;
   onRunCompare: () => void;
+  onComparisonNameChange: (name: string) => void;
+  onLoadComparison: (name: string) => void;
+  onSaveComparison: () => void;
+  onExportComparison: (format: "json" | "csv") => void;
+  onClearComparison: () => void;
 }) {
   const selectedArchitecture = architectures.find((architecture) => architecture.id === selectedId);
   const comparedArchitectures = compareIds.map((id) => architectures.find((architecture) => architecture.id === id)).filter((architecture): architecture is ArchitectureSummary => Boolean(architecture));
@@ -1768,13 +1921,19 @@ function ArchitectureLibraryPanel({
       <ArchitectureComparePanel
         architectures={comparedArchitectures}
         results={compareResults}
+        comparisonName={comparisonName}
+        savedComparisons={savedComparisons}
+        selectedComparisonName={selectedComparisonName}
         runHistory={runHistory}
         busy={compareBusy}
+        sessionsBusy={comparisonsBusy}
         onRun={onRunCompare}
         onLoad={onLoad}
-        onClear={() => {
-          compareIds.forEach((id) => onToggleCompare(id));
-        }}
+        onNameChange={onComparisonNameChange}
+        onLoadSession={onLoadComparison}
+        onSaveSession={onSaveComparison}
+        onExport={onExportComparison}
+        onClear={onClearComparison}
         onLoadBest={() => {
           const best = bestArchitectureComparison(architectures, runHistory, compareResults);
           if (best) {
@@ -1839,19 +1998,35 @@ function ArchitectureLibraryPanel({
 function ArchitectureComparePanel({
   architectures,
   results,
+  comparisonName,
+  savedComparisons,
+  selectedComparisonName,
   runHistory,
   busy,
+  sessionsBusy,
   onRun,
   onLoad,
+  onNameChange,
+  onLoadSession,
+  onSaveSession,
+  onExport,
   onClear,
   onLoadBest,
 }: {
   architectures: ArchitectureSummary[];
   results: Record<string, ArchitectureCompareResult>;
+  comparisonName: string;
+  savedComparisons: ComparisonSummary[];
+  selectedComparisonName: string;
   runHistory: GeneratedRunSummary[];
   busy: boolean;
+  sessionsBusy: boolean;
   onRun: () => void;
   onLoad: (id: string) => void;
+  onNameChange: (name: string) => void;
+  onLoadSession: (name: string) => void;
+  onSaveSession: () => void;
+  onExport: (format: "json" | "csv") => void;
   onClear: () => void;
   onLoadBest: () => void;
 }) {
@@ -1871,7 +2046,7 @@ function ArchitectureComparePanel({
             {busy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
             Run selected
           </button>
-          <button type="button" onClick={onClear} disabled={busy || architectures.length <= 2}>
+          <button type="button" onClick={onClear} disabled={busy || architectures.length === 0}>
             <Trash2 size={16} />
             Clear
           </button>
@@ -1880,6 +2055,39 @@ function ArchitectureComparePanel({
             Load best
           </button>
         </div>
+      </div>
+      <div className="architectureCompareSessionBar">
+        <label>
+          <span>Session</span>
+          <input value={comparisonName} onChange={(event) => onNameChange(event.target.value)} />
+        </label>
+        <label>
+          <span>Saved</span>
+          <select value={selectedComparisonName} onChange={(event) => onLoadSession(event.target.value)} disabled={sessionsBusy}>
+            <option value="">{sessionsBusy ? "Loading..." : "Load comparison"}</option>
+            {savedComparisons.map((comparison) => (
+              <option key={comparison.name} value={comparison.name}>
+                {(comparison.displayName ?? comparison.name) + (comparison.bestAccuracy !== null ? ` / ${formatMaybePercent(comparison.bestAccuracy)}` : "")}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" onClick={onSaveSession} disabled={sessionsBusy || architectures.length < 2}>
+          <Save size={16} />
+          Save
+        </button>
+        <button type="button" onClick={() => onLoadSession(selectedComparisonName)} disabled={sessionsBusy || !selectedComparisonName}>
+          <RefreshCw size={16} />
+          Reload
+        </button>
+        <button type="button" onClick={() => onExport("json")} disabled={architectures.length === 0}>
+          <Download size={16} />
+          JSON
+        </button>
+        <button type="button" onClick={() => onExport("csv")} disabled={architectures.length === 0}>
+          <Download size={16} />
+          CSV
+        </button>
       </div>
       <div className="architectureCompareGrid" style={{ "--compare-columns": Math.max(2, architectures.length) } as CSSProperties}>
         {architectures.map((architecture) => {
@@ -3363,6 +3571,78 @@ function buildQueueReportRows(queue: AblationQueueItem[]) {
   });
 }
 
+function buildArchitectureCompareReportRows(
+  architectures: ArchitectureSummary[],
+  runHistory: GeneratedRunSummary[],
+  results: Record<string, ArchitectureCompareResult>,
+  settings: TrainSettings,
+) {
+  const winner = bestArchitectureComparison(architectures, runHistory, results);
+  return architectures.map((architecture) => {
+    const resolution = resolveTopology(architecture.project);
+    const result = results[architecture.id];
+    const bestRun = architectureBestRun(architecture, runHistory);
+    const metrics = result?.metrics ?? bestRun?.metrics;
+    return {
+      architectureId: architecture.id,
+      architectureName: architecture.name,
+      topologyId: architecture.topologyId,
+      status: result?.status ?? bestRun?.status ?? "ready",
+      runId: result?.runId ?? bestRun?.runId ?? "",
+      runPath: result?.runId ? `runs/${result.runId}` : bestRun?.runId ? `runs/${bestRun.runId}` : "",
+      params: resolution.totalParameters,
+      flops: resolution.totalFlops,
+      blocks: resolution.residualPaths,
+      auxHeads: resolution.auxiliaryHeads,
+      pooling: poolingModeLabel(architecture.project),
+      embedding: resolution.embeddingDimension ?? null,
+      bestAccuracy: metrics?.best_accuracy ?? metrics?.test_accuracy ?? null,
+      finalAccuracy: metrics?.test_accuracy ?? null,
+      trainLoss: metrics?.train_loss ?? null,
+      testLoss: metrics?.test_loss ?? null,
+      learningRate: metrics?.learning_rate ?? settings.learningRate,
+      seed: metrics?.seed ?? settings.seed,
+      epochs: metrics?.epochs ?? settings.epochs,
+      trainSamples: metrics?.train_limit ?? settings.trainLimit,
+      testSamples: metrics?.test_limit ?? settings.testLimit,
+      replayStatus: latestReplayStatusForTopology(architecture.topologyId, runHistory),
+      winner: winner?.id === architecture.id ? "yes" : "",
+    };
+  });
+}
+
+function buildArchitectureWinnerSummary(
+  winner: ArchitectureSummary,
+  architectures: ArchitectureSummary[],
+  runHistory: GeneratedRunSummary[],
+  results: Record<string, ArchitectureCompareResult>,
+  settings: TrainSettings,
+) {
+  const winnerRow = buildArchitectureCompareReportRows([winner], runHistory, results, settings)[0];
+  const runnerUp = architectures
+    .filter((architecture) => architecture.id !== winner.id)
+    .map((architecture) => {
+      const resultAccuracy = results[architecture.id]?.metrics?.best_accuracy ?? results[architecture.id]?.metrics?.test_accuracy;
+      const historyAccuracy = architectureRunStats(architecture, runHistory).bestAccuracy;
+      return { architecture, accuracy: resultAccuracy ?? historyAccuracy };
+    })
+    .filter((item): item is { architecture: ArchitectureSummary; accuracy: number } => typeof item.accuracy === "number" && Number.isFinite(item.accuracy))
+    .sort((left, right) => right.accuracy - left.accuracy)[0];
+  const winnerAccuracy = typeof winnerRow.bestAccuracy === "number" ? winnerRow.bestAccuracy : null;
+  return {
+    architectureId: winner.id,
+    architectureName: winner.name,
+    topologyId: winner.topologyId,
+    bestAccuracy: winnerAccuracy,
+    runnerUpArchitectureId: runnerUp?.architecture.id ?? "",
+    runnerUpAccuracy: runnerUp?.accuracy ?? null,
+    accuracyMargin: typeof winnerAccuracy === "number" && typeof runnerUp?.accuracy === "number" ? winnerAccuracy - runnerUp.accuracy : null,
+    params: winnerRow.params,
+    flops: winnerRow.flops,
+    replayStatus: winnerRow.replayStatus,
+  };
+}
+
 function bestQueueVariant(queue: AblationQueueItem[]) {
   return queue
     .filter((item) => typeof (item.metrics?.best_accuracy ?? item.metrics?.test_accuracy) === "number")
@@ -3464,11 +3744,80 @@ function hydrateExperimentQueue(value: unknown): AblationQueueItem[] {
     .filter((item): item is AblationQueueItem => Boolean(item));
 }
 
+function hydrateComparisonSession(value: unknown): ComparisonSession | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const name = typeof value.name === "string" ? value.name : "";
+  const selectedArchitectureIds = Array.isArray(value.selectedArchitectureIds)
+    ? value.selectedArchitectureIds.filter((id): id is string => typeof id === "string")
+    : [];
+  if (!name || selectedArchitectureIds.length === 0) {
+    return null;
+  }
+  return {
+    name,
+    displayName: typeof value.displayName === "string" ? value.displayName : undefined,
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString(),
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString(),
+    selectedArchitectureIds,
+    trainSettings: hydrateTrainSettings(value.trainSettings),
+    results: hydrateCompareResults(value.results),
+    winnerArchitectureId: typeof value.winnerArchitectureId === "string" ? value.winnerArchitectureId : "",
+    winnerSummary: isRecord(value.winnerSummary) ? value.winnerSummary : null,
+    reportRows: Array.isArray(value.reportRows) ? (value.reportRows as ReturnType<typeof buildArchitectureCompareReportRows>) : [],
+  };
+}
+
+function hydrateCompareResults(value: unknown): Record<string, ArchitectureCompareResult> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const results: Record<string, ArchitectureCompareResult> = {};
+  for (const [id, result] of Object.entries(value)) {
+    if (!isRecord(result) || !isCompareStatus(result.status)) {
+      continue;
+    }
+    results[id] = {
+      status: result.status,
+      runId: typeof result.runId === "string" ? result.runId : undefined,
+      metrics: isRecord(result.metrics) ? (result.metrics as NonNullable<GeneratedTrainMetrics>) : undefined,
+      error: typeof result.error === "string" ? result.error : undefined,
+      updatedAt: typeof result.updatedAt === "string" ? result.updatedAt : undefined,
+    };
+  }
+  return results;
+}
+
+function hydrateTrainSettings(value: unknown): TrainSettings | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return {
+    preset: isRunPreset(value.preset) ? value.preset : "custom",
+    epochs: typeof value.epochs === "number" ? value.epochs : RUN_PRESETS.balanced.epochs,
+    trainLimit: typeof value.trainLimit === "number" ? value.trainLimit : RUN_PRESETS.balanced.trainLimit,
+    testLimit: typeof value.testLimit === "number" ? value.testLimit : RUN_PRESETS.balanced.testLimit,
+    batchSize: typeof value.batchSize === "number" ? value.batchSize : RUN_PRESETS.balanced.batchSize,
+    learningRate: typeof value.learningRate === "number" ? value.learningRate : RUN_PRESETS.balanced.learningRate,
+    seed: typeof value.seed === "number" ? value.seed : RUN_PRESETS.balanced.seed,
+    cpu: typeof value.cpu === "boolean" ? value.cpu : true,
+  };
+}
+
 function isQueuePreset(value: unknown): value is QueuePreset {
   return value === "width" || value === "dropPath" || value === "pooling" || value === "se";
 }
 
+function isRunPreset(value: unknown): value is RunPreset {
+  return value === "fast" || value === "balanced" || value === "stronger" || value === "custom";
+}
+
 function isQueueStatus(value: unknown): value is AblationQueueItem["status"] {
+  return value === "queued" || value === "running" || value === "complete" || value === "failed" || value === "cancelled";
+}
+
+function isCompareStatus(value: unknown): value is ArchitectureCompareResult["status"] {
   return value === "queued" || value === "running" || value === "complete" || value === "failed" || value === "cancelled";
 }
 
@@ -3517,9 +3866,42 @@ function toCsv(rows: ReturnType<typeof buildQueueReportRows>) {
   return [headers.join(","), ...rows.map((row) => headers.map((header) => csvCell(row[header as keyof typeof row])).join(","))].join("\n");
 }
 
-function csvCell(value: string | number | null) {
+function toArchitectureCompareCsv(rows: ReturnType<typeof buildArchitectureCompareReportRows>) {
+  const headers = [
+    "architectureId",
+    "architectureName",
+    "topologyId",
+    "status",
+    "runId",
+    "runPath",
+    "params",
+    "flops",
+    "blocks",
+    "auxHeads",
+    "pooling",
+    "embedding",
+    "bestAccuracy",
+    "finalAccuracy",
+    "trainLoss",
+    "testLoss",
+    "learningRate",
+    "seed",
+    "epochs",
+    "trainSamples",
+    "testSamples",
+    "replayStatus",
+    "winner",
+  ];
+  return [headers.join(","), ...rows.map((row) => headers.map((header) => csvCell(row[header as keyof typeof row])).join(","))].join("\n");
+}
+
+function csvCell(value: string | number | boolean | null) {
   const text = value === null ? "" : String(value);
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function slugName(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "architecture-comparison";
 }
 
 function downloadTextFile(filename: string, content: string, type: string) {
@@ -3705,10 +4087,8 @@ function architectureRunStats(architecture: ArchitectureSummary | undefined, run
   if (!architecture) {
     return { bestAccuracy: null, bestRunId: null, lastTrained: null };
   }
-  const runs = runHistory.filter((run) => run.topologyId === architecture.topologyId || run.metrics.topology_id === architecture.topologyId);
-  const best = runs
-    .filter((run) => typeof (run.metrics.best_accuracy ?? run.metrics.test_accuracy) === "number")
-    .sort((left, right) => (right.metrics.best_accuracy ?? right.metrics.test_accuracy ?? -1) - (left.metrics.best_accuracy ?? left.metrics.test_accuracy ?? -1))[0];
+  const runs = architectureRuns(architecture, runHistory);
+  const best = architectureBestRun(architecture, runHistory);
   const latest = runs
     .map((run) => run.updatedAt ?? run.metrics.updated_at ?? run.createdAt ?? run.metrics.created_at ?? "")
     .filter(Boolean)
@@ -3718,6 +4098,16 @@ function architectureRunStats(architecture: ArchitectureSummary | undefined, run
     bestRunId: best?.runId ?? null,
     lastTrained: latest ?? null,
   };
+}
+
+function architectureRuns(architecture: ArchitectureSummary, runHistory: GeneratedRunSummary[]) {
+  return runHistory.filter((run) => run.topologyId === architecture.topologyId || run.metrics.topology_id === architecture.topologyId);
+}
+
+function architectureBestRun(architecture: ArchitectureSummary, runHistory: GeneratedRunSummary[]) {
+  return architectureRuns(architecture, runHistory)
+    .filter((run) => typeof (run.metrics.best_accuracy ?? run.metrics.test_accuracy) === "number")
+    .sort((left, right) => (right.metrics.best_accuracy ?? right.metrics.test_accuracy ?? -1) - (left.metrics.best_accuracy ?? left.metrics.test_accuracy ?? -1))[0];
 }
 
 function bestArchitectureComparison(architectures: ArchitectureSummary[], runHistory: GeneratedRunSummary[], results: Record<string, ArchitectureCompareResult>) {

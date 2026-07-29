@@ -386,6 +386,53 @@ h1 {
   color: #9aa6b5;
 }
 
+.architectureCompareSessionBar {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) repeat(4, auto);
+  gap: 8px;
+  align-items: end;
+}
+
+.architectureCompareSessionBar label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.architectureCompareSessionBar input,
+.architectureCompareSessionBar select,
+.architectureCompareSessionBar button {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 9px;
+  background: #fff;
+  color: var(--blue);
+  font-weight: 900;
+}
+
+.architectureCompareSessionBar input,
+.architectureCompareSessionBar select {
+  color: var(--ink);
+}
+
+.architectureCompareSessionBar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.architectureCompareSessionBar button:disabled {
+  color: #9aa6b5;
+  cursor: not-allowed;
+}
+
 .architectureCompareGrid {
   display: grid;
   grid-template-columns: repeat(var(--compare-columns), minmax(0, 1fr));
@@ -1686,6 +1733,7 @@ h1 {
   .architectureHomeGrid,
   .architectureLibraryGrid,
   .architectureCompareGrid,
+  .architectureCompareSessionBar,
   .trainingControls,
   .trainingMetricGrid,
   .trainingRuntimeGrid,

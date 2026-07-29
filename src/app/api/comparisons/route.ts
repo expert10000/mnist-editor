@@ -14,6 +14,8 @@ type ComparisonPayload = {
   reportRows?: unknown;
   winnerArchitectureId?: unknown;
   winnerSummary?: unknown;
+  actionHistory?: unknown;
+  lockedWinner?: unknown;
 };
 
 export async function GET(request: Request) {
@@ -75,6 +77,8 @@ export async function POST(request: Request) {
     results: isRecord(payload.results) ? payload.results : {},
     winnerArchitectureId: typeof payload.winnerArchitectureId === "string" ? payload.winnerArchitectureId : "",
     winnerSummary: isRecord(payload.winnerSummary) ? payload.winnerSummary : null,
+    actionHistory: Array.isArray(payload.actionHistory) ? payload.actionHistory : [],
+    lockedWinner: isRecord(payload.lockedWinner) ? payload.lockedWinner : null,
     reportRows,
   };
 
@@ -86,6 +90,11 @@ export async function POST(request: Request) {
   await writeFile(path.join(directory, "session.json"), JSON.stringify(session, null, 2), "utf8");
   await writeFile(path.join(directory, "report.json"), JSON.stringify({ exportedAt: now, winnerSummary: session.winnerSummary, rows: reportRows }, null, 2), "utf8");
   await writeFile(path.join(directory, "report.csv"), toCsv(reportRows), "utf8");
+  if (session.lockedWinner) {
+    const winnerDirectory = path.join(directory, "winner");
+    await mkdir(winnerDirectory, { recursive: true });
+    await writeFile(path.join(winnerDirectory, "winner.json"), JSON.stringify(session.lockedWinner, null, 2), "utf8");
+  }
 
   return NextResponse.json({ comparison: session });
 }

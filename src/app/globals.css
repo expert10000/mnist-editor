@@ -433,6 +433,80 @@ h1 {
   cursor: not-allowed;
 }
 
+.architectureWinnerActions {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(4, auto);
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid rgba(22, 124, 128, 0.24);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.architectureWinnerActions div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.architectureWinnerActions strong {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.architectureWinnerActions span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.architectureWinnerActions button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: #fff;
+  color: var(--blue);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.architectureWinnerActions button:last-child {
+  border-color: rgba(168, 100, 19, 0.38);
+  color: var(--amber);
+}
+
+.architectureWinnerActions button:disabled {
+  color: #9aa6b5;
+  cursor: not-allowed;
+}
+
+.comparisonActionHistory {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px dashed rgba(22, 124, 128, 0.34);
+  border-radius: 8px;
+  background: #fbfefe;
+}
+
+.comparisonActionHistory strong {
+  font-size: 0.82rem;
+}
+
+.comparisonActionHistory span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .architectureCompareGrid {
   display: grid;
   grid-template-columns: repeat(var(--compare-columns), minmax(0, 1fr));
@@ -1734,6 +1808,7 @@ h1 {
   .architectureLibraryGrid,
   .architectureCompareGrid,
   .architectureCompareSessionBar,
+  .architectureWinnerActions,
   .trainingControls,
   .trainingMetricGrid,
   .trainingRuntimeGrid,

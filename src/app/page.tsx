@@ -1772,6 +1772,15 @@ function ArchitectureLibraryPanel({
         busy={compareBusy}
         onRun={onRunCompare}
         onLoad={onLoad}
+        onClear={() => {
+          compareIds.forEach((id) => onToggleCompare(id));
+        }}
+        onLoadBest={() => {
+          const best = bestArchitectureComparison(architectures, runHistory, compareResults);
+          if (best) {
+            onLoad(best.id);
+          }
+        }}
       />
       <div className="architectureLibraryGrid">
         {architectures.map((architecture) => {
@@ -1834,6 +1843,8 @@ function ArchitectureComparePanel({
   busy,
   onRun,
   onLoad,
+  onClear,
+  onLoadBest,
 }: {
   architectures: ArchitectureSummary[];
   results: Record<string, ArchitectureCompareResult>;
@@ -1841,18 +1852,34 @@ function ArchitectureComparePanel({
   busy: boolean;
   onRun: () => void;
   onLoad: (id: string) => void;
+  onClear: () => void;
+  onLoadBest: () => void;
 }) {
+  const bestArchitecture = bestArchitectureComparison(architectures, runHistory, results);
   return (
     <div className="architectureComparePanel">
       <div className="architectureCompareHeader">
         <div>
-          <strong>Architecture compare</strong>
-          <span>{architectures.length} selected / choose 2-4</span>
+          <p className="eyebrow">Architecture compare</p>
+          <strong>Compare selected families</strong>
+          <span>
+            {architectures.length} selected / choose 2-4{bestArchitecture ? ` / best ${bestArchitecture.name}` : ""}
+          </span>
         </div>
-        <button type="button" onClick={onRun} disabled={busy || architectures.length < 2}>
-          {busy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
-          Run selected architectures
-        </button>
+        <div className="architectureCompareActions">
+          <button type="button" onClick={onRun} disabled={busy || architectures.length < 2}>
+            {busy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
+            Run selected
+          </button>
+          <button type="button" onClick={onClear} disabled={busy || architectures.length <= 2}>
+            <Trash2 size={16} />
+            Clear
+          </button>
+          <button type="button" onClick={onLoadBest} disabled={busy || !bestArchitecture}>
+            <Trophy size={16} />
+            Load best
+          </button>
+        </div>
       </div>
       <div className="architectureCompareGrid" style={{ "--compare-columns": Math.max(2, architectures.length) } as CSSProperties}>
         {architectures.map((architecture) => {
@@ -3691,6 +3718,17 @@ function architectureRunStats(architecture: ArchitectureSummary | undefined, run
     bestRunId: best?.runId ?? null,
     lastTrained: latest ?? null,
   };
+}
+
+function bestArchitectureComparison(architectures: ArchitectureSummary[], runHistory: GeneratedRunSummary[], results: Record<string, ArchitectureCompareResult>) {
+  return architectures
+    .map((architecture) => {
+      const resultAccuracy = results[architecture.id]?.metrics?.best_accuracy ?? results[architecture.id]?.metrics?.test_accuracy;
+      const historyAccuracy = architectureRunStats(architecture, runHistory).bestAccuracy;
+      return { architecture, accuracy: resultAccuracy ?? historyAccuracy };
+    })
+    .filter((item): item is { architecture: ArchitectureSummary; accuracy: number } => typeof item.accuracy === "number" && Number.isFinite(item.accuracy))
+    .sort((left, right) => right.accuracy - left.accuracy)[0]?.architecture;
 }
 
 function latestReplayStatusForTopology(topologyId: string, runHistory: GeneratedRunSummary[]) {

@@ -314,23 +314,29 @@ h1 {
 
 .architectureComparePanel {
   display: grid;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line);
+  gap: 10px;
+  padding: 12px;
+  border: 2px solid rgba(22, 124, 128, 0.5);
   border-radius: 8px;
-  background: #fbfcfd;
+  background: #f4fbfb;
 }
 
 .architectureCompareHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(22, 124, 128, 0.22);
 }
 
 .architectureCompareHeader div {
   display: grid;
   gap: 2px;
+}
+
+.architectureCompareHeader strong {
+  font-size: 1.18rem;
 }
 
 .architectureCompareHeader span {
@@ -339,7 +345,14 @@ h1 {
   font-weight: 900;
 }
 
-.architectureCompareHeader button,
+.architectureCompareActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.architectureCompareActions button,
 .architectureCompareCard button {
   min-height: 34px;
   display: inline-flex;
@@ -355,10 +368,22 @@ h1 {
   font-weight: 900;
 }
 
-.architectureCompareHeader button:disabled,
+.architectureCompareActions button:first-child {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+}
+
+.architectureCompareActions button:disabled,
 .architectureCompareCard button:disabled {
   color: #9aa6b5;
   cursor: wait;
+}
+
+.architectureCompareActions button:first-child:disabled {
+  background: #eef2f6;
+  border-color: var(--line);
+  color: #9aa6b5;
 }
 
 .architectureCompareGrid {

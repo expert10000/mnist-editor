@@ -507,6 +507,120 @@ h1 {
   font-weight: 800;
 }
 
+.winnerAnalysisPanel {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(36, 87, 166, 0.22);
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.winnerAnalysisPanel.empty {
+  min-height: 58px;
+  align-content: center;
+}
+
+.winnerAnalysisHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.winnerAnalysisHeader div,
+.winnerAnalysisPanel.empty div {
+  display: grid;
+  gap: 2px;
+}
+
+.winnerAnalysisHeader strong,
+.winnerAnalysisPanel.empty strong {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.winnerAnalysisHeader span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.winnerAnalysisMetrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.winnerAnalysisMetrics span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.winnerAnalysisMetrics strong {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.winnerWarnings {
+  display: grid;
+  gap: 5px;
+}
+
+.winnerWarnings span {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid rgba(168, 100, 19, 0.24);
+  border-radius: 7px;
+  background: #fffaf0;
+  color: #8b5a13;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.winnerWarnings span:first-child:last-child {
+  border-color: rgba(23, 114, 69, 0.22);
+  background: #f4faf6;
+  color: var(--green);
+}
+
+.winnerRecommendedActions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.winnerRecommendedActions button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--blue);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.winnerRecommendedActions button:disabled {
+  color: #9aa6b5;
+  cursor: not-allowed;
+}
+
 .architectureCompareGrid {
   display: grid;
   grid-template-columns: repeat(var(--compare-columns), minmax(0, 1fr));
@@ -1809,6 +1923,8 @@ h1 {
   .architectureCompareGrid,
   .architectureCompareSessionBar,
   .architectureWinnerActions,
+  .winnerAnalysisMetrics,
+  .winnerRecommendedActions,
   .trainingControls,
   .trainingMetricGrid,
   .trainingRuntimeGrid,

@@ -243,6 +243,18 @@ type ComparisonLockedWinner = {
   metrics: NonNullable<GeneratedTrainMetrics> | null;
   summary: Record<string, unknown>;
 };
+type WinnerAnalysis = {
+  winnerName: string;
+  runnerUpName: string;
+  accuracyMargin: number | null;
+  paramsDelta: number | null;
+  flopsDelta: number | null;
+  durationDelta: number | null;
+  accuracyPerMillionParams: number | null;
+  accuracyPerHundredMillionFlops: number | null;
+  warnings: string[];
+  recommendedAction: string;
+} | null;
 type AblationQueueItem = {
   id: string;
   label: string;
@@ -720,7 +732,7 @@ export default function Home() {
     setNotice({ tone: "good", text: "Architecture comparison cleared." });
   }
 
-  async function runArchitectureCompare() {
+  async function runArchitectureCompare(settingsOverride = trainSettings) {
     const selectedArchitectures = compareArchitectureIds.map((id) => architectures.find((architecture) => architecture.id === id)).filter((architecture): architecture is ArchitectureSummary => Boolean(architecture));
     if (selectedArchitectures.length < 2) {
       setNotice({ tone: "bad", text: "Select at least 2 architectures to compare." });
@@ -729,6 +741,7 @@ export default function Home() {
     setArchitectureCompareBusy(true);
     setTrainingBusy(true);
     setTrainingLogs([]);
+    setTrainSettings(settingsOverride);
     setNotice({ tone: "good", text: `Architecture compare started for ${selectedArchitectures.length} architectures.` });
     setArchitectureCompareResults((current) => ({
       ...current,
@@ -740,7 +753,7 @@ export default function Home() {
           ...current,
           [architecture.id]: { ...current[architecture.id], status: "running", error: undefined, updatedAt: new Date().toISOString() },
         }));
-        const started = await startGeneratedRun(architecture.project);
+        const started = await startGeneratedRun(architecture.project, settingsOverride);
         setArchitectureCompareResults((current) => ({
           ...current,
           [architecture.id]: { ...current[architecture.id], status: "running", runId: started.runId, updatedAt: new Date().toISOString() },
@@ -906,7 +919,7 @@ export default function Home() {
     setNotice({ tone: "good", text: `${payload.architecture.name} is now a saved architecture.` });
   }
 
-  async function startVariantQueueFromComparisonWinner() {
+  async function startVariantQueueFromComparisonWinner(presetOverride = queuePreset) {
     const winner = currentComparisonWinner();
     if (!winner) {
       setNotice({ tone: "bad", text: "No comparison winner to queue yet." });
@@ -915,11 +928,12 @@ export default function Home() {
     setSelectedArchitectureId(winner.id);
     setHistory({ past: [], present: winner.project, future: [] });
     setSelectedNodeId(winner.project.nodes.some((node) => node.id === selectedNodeId) ? selectedNodeId : winner.project.nodes[0]?.id ?? "input");
-    const variants = createAblationVariants(winner.project, queuePreset);
+    setQueuePreset(presetOverride);
+    const variants = createAblationVariants(winner.project, presetOverride);
     setAblationQueue(variants);
-    setExperimentName(`${slugName(comparisonName || winner.name)}-${queuePreset}`);
+    setExperimentName(`${slugName(comparisonName || winner.name)}-${presetOverride}`);
     await saveComparisonSession({
-      action: comparisonAction("start-queue", winner, `${variants.length} ${queuePreset} variants prepared from winner`),
+      action: comparisonAction("start-queue", winner, `${variants.length} ${presetOverride} variants prepared from winner`),
     });
     setNotice({ tone: "good", text: `Variant queue started from ${winner.name}.` });
   }
@@ -1645,6 +1659,7 @@ export default function Home() {
         actionHistory={comparisonActionHistory}
         lockedWinner={lockedComparisonWinner}
         runHistory={runHistory}
+        settings={trainSettings}
         currentTopologyId={currentTopologyId}
         busy={architectureBusy || architectureCompareBusy}
         compareBusy={architectureCompareBusy}
@@ -1664,6 +1679,9 @@ export default function Home() {
         onDuplicateWinner={() => void saveComparisonWinnerAsArchitecture("duplicate")}
         onStartWinnerQueue={() => void startVariantQueueFromComparisonWinner()}
         onLockWinner={() => void lockComparisonWinner()}
+        onRunStrongerCompare={() => void runArchitectureCompare({ preset: "stronger", ...RUN_PRESETS.stronger, cpu: trainSettings.cpu })}
+        onQueueWinnerWidth={() => void startVariantQueueFromComparisonWinner("width")}
+        onQueueWinnerDropPath={() => void startVariantQueueFromComparisonWinner("dropPath")}
       />
 
       <GeneratedTrainingPanel
@@ -1971,6 +1989,7 @@ function ArchitectureLibraryPanel({
   actionHistory,
   lockedWinner,
   runHistory,
+  settings,
   currentTopologyId,
   busy,
   compareBusy,
@@ -1990,6 +2009,9 @@ function ArchitectureLibraryPanel({
   onDuplicateWinner,
   onStartWinnerQueue,
   onLockWinner,
+  onRunStrongerCompare,
+  onQueueWinnerWidth,
+  onQueueWinnerDropPath,
 }: {
   architectures: ArchitectureSummary[];
   selectedId: string;
@@ -2001,6 +2023,7 @@ function ArchitectureLibraryPanel({
   actionHistory: ComparisonAction[];
   lockedWinner: ComparisonLockedWinner | null;
   runHistory: GeneratedRunSummary[];
+  settings: TrainSettings;
   currentTopologyId: string;
   busy: boolean;
   compareBusy: boolean;
@@ -2020,6 +2043,9 @@ function ArchitectureLibraryPanel({
   onDuplicateWinner: () => void;
   onStartWinnerQueue: () => void;
   onLockWinner: () => void;
+  onRunStrongerCompare: () => void;
+  onQueueWinnerWidth: () => void;
+  onQueueWinnerDropPath: () => void;
 }) {
   const selectedArchitecture = architectures.find((architecture) => architecture.id === selectedId);
   const comparedArchitectures = compareIds.map((id) => architectures.find((architecture) => architecture.id === id)).filter((architecture): architecture is ArchitectureSummary => Boolean(architecture));
@@ -2078,6 +2104,7 @@ function ArchitectureLibraryPanel({
         actionHistory={actionHistory}
         lockedWinner={lockedWinner}
         runHistory={runHistory}
+        settings={settings}
         busy={compareBusy}
         sessionsBusy={comparisonsBusy}
         onRun={onRunCompare}
@@ -2091,6 +2118,9 @@ function ArchitectureLibraryPanel({
         onDuplicateWinner={onDuplicateWinner}
         onStartWinnerQueue={onStartWinnerQueue}
         onLockWinner={onLockWinner}
+        onRunStronger={onRunStrongerCompare}
+        onQueueWidth={onQueueWinnerWidth}
+        onQueueDropPath={onQueueWinnerDropPath}
         onLoadBest={() => {
           const best = bestArchitectureComparison(architectures, runHistory, compareResults);
           if (best) {
@@ -2161,6 +2191,7 @@ function ArchitectureComparePanel({
   actionHistory,
   lockedWinner,
   runHistory,
+  settings,
   busy,
   sessionsBusy,
   onRun,
@@ -2175,6 +2206,9 @@ function ArchitectureComparePanel({
   onDuplicateWinner,
   onStartWinnerQueue,
   onLockWinner,
+  onRunStronger,
+  onQueueWidth,
+  onQueueDropPath,
 }: {
   architectures: ArchitectureSummary[];
   results: Record<string, ArchitectureCompareResult>;
@@ -2184,6 +2218,7 @@ function ArchitectureComparePanel({
   actionHistory: ComparisonAction[];
   lockedWinner: ComparisonLockedWinner | null;
   runHistory: GeneratedRunSummary[];
+  settings: TrainSettings;
   busy: boolean;
   sessionsBusy: boolean;
   onRun: () => void;
@@ -2198,8 +2233,12 @@ function ArchitectureComparePanel({
   onDuplicateWinner: () => void;
   onStartWinnerQueue: () => void;
   onLockWinner: () => void;
+  onRunStronger: () => void;
+  onQueueWidth: () => void;
+  onQueueDropPath: () => void;
 }) {
   const bestArchitecture = bestArchitectureComparison(architectures, runHistory, results);
+  const winnerAnalysis = buildWinnerAnalysis(architectures, runHistory, results, settings);
   const winnerLocked = Boolean(bestArchitecture && lockedWinner?.architectureId === bestArchitecture.id);
   return (
     <div className="architectureComparePanel">
@@ -2281,6 +2320,14 @@ function ArchitectureComparePanel({
           {winnerLocked ? "Locked" : "Lock winner"}
         </button>
       </div>
+      <WinnerAnalysisPanel
+        analysis={winnerAnalysis}
+        busy={busy}
+        onEditWinner={onLoadBest}
+        onRunStronger={onRunStronger}
+        onQueueWidth={onQueueWidth}
+        onQueueDropPath={onQueueDropPath}
+      />
       {actionHistory.length > 0 ? (
         <div className="comparisonActionHistory">
           <strong>Comparison history</strong>
@@ -2347,6 +2394,92 @@ function ArchitectureComparePanel({
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function WinnerAnalysisPanel({
+  analysis,
+  busy,
+  onEditWinner,
+  onRunStronger,
+  onQueueWidth,
+  onQueueDropPath,
+}: {
+  analysis: WinnerAnalysis;
+  busy: boolean;
+  onEditWinner: () => void;
+  onRunStronger: () => void;
+  onQueueWidth: () => void;
+  onQueueDropPath: () => void;
+}) {
+  if (!analysis) {
+    return (
+      <div className="winnerAnalysisPanel empty">
+        <div>
+          <p className="eyebrow">Winner analysis</p>
+          <strong>Run or load a comparison to analyze the winner.</strong>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="winnerAnalysisPanel">
+      <div className="winnerAnalysisHeader">
+        <div>
+          <p className="eyebrow">Winner analysis</p>
+          <strong>{analysis.winnerName} vs {analysis.runnerUpName}</strong>
+          <span>Recommended next action: {analysis.recommendedAction}</span>
+        </div>
+      </div>
+      <div className="winnerAnalysisMetrics">
+        <span>
+          Accuracy margin
+          <strong>{formatMaybeSignedPercent(analysis.accuracyMargin)}</strong>
+        </span>
+        <span>
+          Params cost
+          <strong>{analysis.paramsDelta === null ? "-" : formatDeltaCompact(analysis.paramsDelta)}</strong>
+        </span>
+        <span>
+          FLOPs cost
+          <strong>{analysis.flopsDelta === null ? "-" : formatDeltaCompact(analysis.flopsDelta)}</strong>
+        </span>
+        <span>
+          Speed delta
+          <strong>{formatDurationDelta(analysis.durationDelta)}</strong>
+        </span>
+        <span>
+          Acc / 1M params
+          <strong>{formatEfficiency(analysis.accuracyPerMillionParams)}</strong>
+        </span>
+        <span>
+          Acc / 100M FLOPs
+          <strong>{formatEfficiency(analysis.accuracyPerHundredMillionFlops)}</strong>
+        </span>
+      </div>
+      <div className="winnerWarnings">
+        {analysis.warnings.length === 0 ? <span>No comparison warnings.</span> : analysis.warnings.map((warning) => <span key={warning}>{warning}</span>)}
+      </div>
+      <div className="winnerRecommendedActions">
+        <button type="button" onClick={onEditWinner} disabled={busy}>
+          <FolderOpen size={16} />
+          Edit winner
+        </button>
+        <button type="button" onClick={onRunStronger} disabled={busy}>
+          <Play size={16} />
+          Run stronger preset
+        </button>
+        <button type="button" onClick={onQueueWidth} disabled={busy}>
+          <ListChecks size={16} />
+          Queue width sweep
+        </button>
+        <button type="button" onClick={onQueueDropPath} disabled={busy}>
+          <ListChecks size={16} />
+          Try regularization sweep
+        </button>
       </div>
     </div>
   );
@@ -3813,6 +3946,79 @@ function buildArchitectureCompareReportRows(
   });
 }
 
+function buildWinnerAnalysis(
+  architectures: ArchitectureSummary[],
+  runHistory: GeneratedRunSummary[],
+  results: Record<string, ArchitectureCompareResult>,
+  settings: TrainSettings,
+): WinnerAnalysis {
+  const rows = buildArchitectureCompareReportRows(architectures, runHistory, results, settings)
+    .filter((row) => typeof row.bestAccuracy === "number" && Number.isFinite(row.bestAccuracy))
+    .sort((left, right) => (right.bestAccuracy ?? -1) - (left.bestAccuracy ?? -1));
+  const winner = rows[0];
+  const runnerUp = rows[1];
+  if (!winner || !runnerUp) {
+    return null;
+  }
+  const winnerArchitecture = architectures.find((architecture) => architecture.id === winner.architectureId);
+  const runnerArchitecture = architectures.find((architecture) => architecture.id === runnerUp.architectureId);
+  const winnerMetrics = winnerArchitecture ? architectureComparisonMetrics(winnerArchitecture, runHistory, results) : null;
+  const runnerMetrics = runnerArchitecture ? architectureComparisonMetrics(runnerArchitecture, runHistory, results) : null;
+  const accuracyMargin = typeof winner.bestAccuracy === "number" && typeof runnerUp.bestAccuracy === "number" ? winner.bestAccuracy - runnerUp.bestAccuracy : null;
+  const paramsDelta = typeof winner.params === "number" && typeof runnerUp.params === "number" ? winner.params - runnerUp.params : null;
+  const flopsDelta = typeof winner.flops === "number" && typeof runnerUp.flops === "number" ? winner.flops - runnerUp.flops : null;
+  const durationDelta =
+    typeof winnerMetrics?.duration_seconds === "number" && typeof runnerMetrics?.duration_seconds === "number" ? winnerMetrics.duration_seconds - runnerMetrics.duration_seconds : null;
+  const accuracyPerMillionParams = typeof winner.bestAccuracy === "number" && winner.params > 0 ? (winner.bestAccuracy * 100) / (winner.params / 1_000_000) : null;
+  const accuracyPerHundredMillionFlops = typeof winner.bestAccuracy === "number" && winner.flops > 0 ? (winner.bestAccuracy * 100) / (winner.flops / 100_000_000) : null;
+  const replayStatus = winnerArchitecture ? latestReplayStatusForTopology(winnerArchitecture.topologyId, runHistory) : "none";
+  const compactAlternative = rows.find((row) => {
+    if (row.architectureId === winner.architectureId || typeof row.bestAccuracy !== "number" || typeof winner.bestAccuracy !== "number") {
+      return false;
+    }
+    const closeAccuracy = winner.bestAccuracy - row.bestAccuracy <= 0.03;
+    const muchCheaper = row.params < winner.params * 0.6 || row.flops < winner.flops * 0.6;
+    return closeAccuracy && muchCheaper;
+  });
+  const warnings: string[] = [];
+  if (((paramsDelta ?? 0) > runnerUp.params * 0.5 || (flopsDelta ?? 0) > runnerUp.flops * 0.5) && (accuracyMargin ?? 1) < 0.02) {
+    warnings.push("Winner is much larger but only slightly better than runner-up.");
+  }
+  if (compactAlternative) {
+    warnings.push(`${compactAlternative.architectureName} is close to the winner at much lower cost.`);
+  }
+  if (replayStatus === "none") {
+    warnings.push("Replay is missing, so this result is not reproducibility-checked.");
+  }
+  if (typeof winnerMetrics?.train_loss === "number" && typeof winnerMetrics.test_loss === "number" && winnerMetrics.test_loss > winnerMetrics.train_loss * 1.5) {
+    warnings.push("Validation loss is much worse than train loss, possible overfit.");
+  }
+  const recommendedAction =
+    replayStatus === "none"
+      ? "Run stronger preset"
+      : warnings.some((warning) => warning.includes("overfit"))
+        ? "Try regularization sweep"
+        : compactAlternative
+          ? "Edit winner"
+          : "Queue width sweep from winner";
+  return {
+    winnerName: winner.architectureName,
+    runnerUpName: runnerUp.architectureName,
+    accuracyMargin,
+    paramsDelta,
+    flopsDelta,
+    durationDelta,
+    accuracyPerMillionParams,
+    accuracyPerHundredMillionFlops,
+    warnings,
+    recommendedAction,
+  };
+}
+
+function architectureComparisonMetrics(architecture: ArchitectureSummary, runHistory: GeneratedRunSummary[], results: Record<string, ArchitectureCompareResult>) {
+  return results[architecture.id]?.metrics ?? architectureBestRun(architecture, runHistory)?.metrics ?? null;
+}
+
 function buildArchitectureWinnerSummary(
   winner: ArchitectureSummary,
   architectures: ArchitectureSummary[],
@@ -4296,6 +4502,18 @@ function formatSignedDecimal(value: number) {
 
 function formatMaybeNumber(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "-";
+}
+
+function formatDurationDelta(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(1)}s`;
+}
+
+function formatEfficiency(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(1) : "-";
 }
 
 function formatLearningRate(value: number | null | undefined) {

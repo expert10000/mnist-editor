@@ -312,6 +312,154 @@ h1 {
   gap: 8px;
 }
 
+.architectureComparePanel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.architectureCompareHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.architectureCompareHeader div {
+  display: grid;
+  gap: 2px;
+}
+
+.architectureCompareHeader span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.architectureCompareHeader button,
+.architectureCompareCard button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: #fff;
+  color: var(--blue);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.architectureCompareHeader button:disabled,
+.architectureCompareCard button:disabled {
+  color: #9aa6b5;
+  cursor: wait;
+}
+
+.architectureCompareGrid {
+  display: grid;
+  grid-template-columns: repeat(var(--compare-columns), minmax(0, 1fr));
+  gap: 8px;
+}
+
+.architectureCompareCard {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.architectureCompareCard.running {
+  border-color: rgba(36, 87, 166, 0.45);
+  background: #edf4ff;
+}
+
+.architectureCompareCard.complete {
+  border-color: rgba(23, 114, 69, 0.32);
+}
+
+.architectureCompareCard.failed,
+.architectureCompareCard.cancelled {
+  border-color: rgba(184, 50, 58, 0.34);
+}
+
+.topologyThumbnail {
+  width: 100%;
+  height: 72px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: linear-gradient(#eef2f6 1px, transparent 1px), linear-gradient(90deg, #eef2f6 1px, transparent 1px), #fff;
+  background-size: 16px 16px;
+}
+
+.topologyThumbnail line {
+  stroke: #8a97a8;
+  stroke-width: 10;
+  stroke-linecap: round;
+}
+
+.topologyThumbnail rect {
+  fill: #fbfcfd;
+  stroke: #2457a6;
+  stroke-width: 4;
+}
+
+.architectureCompareTitle {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.architectureCompareTitle strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.architectureCompareTitle span,
+.architectureCompareCard small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.architectureCompareFacts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.architectureCompareFacts span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.architectureCompareFacts strong {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .architectureCard {
   min-width: 0;
   display: grid;
@@ -330,8 +478,8 @@ h1 {
   background: #edf4ff;
 }
 
-.architectureCard:disabled {
-  cursor: wait;
+.architectureCard.compared {
+  box-shadow: inset 4px 0 0 var(--teal);
 }
 
 .architectureCardTitle {
@@ -388,6 +536,38 @@ h1 {
   color: var(--ink);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.architectureCardActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.architectureCardActions button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.architectureCardActions button.selected {
+  border-color: var(--teal);
+  background: #eefafa;
+  color: var(--teal);
+}
+
+.architectureCardActions button:disabled {
+  color: #9aa6b5;
+  cursor: wait;
 }
 
 .trainingPanel {
@@ -1480,6 +1660,7 @@ h1 {
   .summaryGrid,
   .architectureHomeGrid,
   .architectureLibraryGrid,
+  .architectureCompareGrid,
   .trainingControls,
   .trainingMetricGrid,
   .trainingRuntimeGrid,

@@ -197,6 +197,13 @@ type ArchitectureSummary = {
   locked: boolean;
   project: TopologyProject;
 };
+type ArchitectureCompareResult = {
+  status: "queued" | "running" | "complete" | "failed" | "cancelled";
+  runId?: string;
+  metrics?: NonNullable<GeneratedTrainMetrics>;
+  error?: string;
+  updatedAt?: string;
+};
 type AblationQueueItem = {
   id: string;
   label: string;
@@ -260,6 +267,9 @@ export default function Home() {
   const [architectures, setArchitectures] = useState<ArchitectureSummary[]>([]);
   const [selectedArchitectureId, setSelectedArchitectureId] = useState("baseline-fiveblock");
   const [architectureBusy, setArchitectureBusy] = useState(false);
+  const [compareArchitectureIds, setCompareArchitectureIds] = useState<string[]>(["baseline-fiveblock", "preset-compact-five-block", "preset-wide-se"]);
+  const [architectureCompareResults, setArchitectureCompareResults] = useState<Record<string, ArchitectureCompareResult>>({});
+  const [architectureCompareBusy, setArchitectureCompareBusy] = useState(false);
   const [trainSettings, setTrainSettings] = useState<TrainSettings>({
     preset: "balanced",
     ...RUN_PRESETS.balanced,
@@ -627,6 +637,76 @@ export default function Home() {
     setNotice({ tone: "good", text: `${current.name} archived.` });
   }
 
+  function toggleCompareArchitecture(id: string) {
+    setCompareArchitectureIds((current) => {
+      if (current.includes(id)) {
+        if (current.length <= 2) {
+          setNotice({ tone: "bad", text: "Compare mode needs at least 2 architectures." });
+          return current;
+        }
+        return current.filter((item) => item !== id);
+      }
+      if (current.length >= 4) {
+        setNotice({ tone: "bad", text: "Compare mode supports up to 4 architectures at once." });
+        return current;
+      }
+      return [...current, id];
+    });
+  }
+
+  async function runArchitectureCompare() {
+    const selectedArchitectures = compareArchitectureIds.map((id) => architectures.find((architecture) => architecture.id === id)).filter((architecture): architecture is ArchitectureSummary => Boolean(architecture));
+    if (selectedArchitectures.length < 2) {
+      setNotice({ tone: "bad", text: "Select at least 2 architectures to compare." });
+      return;
+    }
+    setArchitectureCompareBusy(true);
+    setTrainingBusy(true);
+    setTrainingLogs([]);
+    setNotice({ tone: "good", text: `Architecture compare started for ${selectedArchitectures.length} architectures.` });
+    setArchitectureCompareResults((current) => ({
+      ...current,
+      ...Object.fromEntries(selectedArchitectures.map((architecture) => [architecture.id, { status: "queued" as const, updatedAt: new Date().toISOString() }])),
+    }));
+    try {
+      for (const architecture of selectedArchitectures) {
+        setArchitectureCompareResults((current) => ({
+          ...current,
+          [architecture.id]: { ...current[architecture.id], status: "running", error: undefined, updatedAt: new Date().toISOString() },
+        }));
+        const started = await startGeneratedRun(architecture.project);
+        setArchitectureCompareResults((current) => ({
+          ...current,
+          [architecture.id]: { ...current[architecture.id], status: "running", runId: started.runId, updatedAt: new Date().toISOString() },
+        }));
+        const finished = await waitForGeneratedRun(started.runId);
+        setArchitectureCompareResults((current) => ({
+          ...current,
+          [architecture.id]: {
+            status: finished.status,
+            runId: started.runId,
+            metrics: finished.metrics,
+            error: finished.error,
+            updatedAt: new Date().toISOString(),
+          },
+        }));
+        void loadGeneratedRuns();
+        if (finished.status === "cancelled") {
+          break;
+        }
+      }
+      setNotice({ tone: "good", text: "Architecture compare completed." });
+    } catch (error) {
+      setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Architecture compare failed." });
+    } finally {
+      setArchitectureCompareBusy(false);
+      setTrainingBusy(false);
+      setActiveRunId(null);
+      void loadGeneratedMetrics();
+      void loadGeneratedRuns();
+    }
+  }
+
   function buildAblationQueue() {
     const variants = createAblationVariants(project, queuePreset);
     setAblationQueue(variants);
@@ -693,11 +773,17 @@ export default function Home() {
       setAblationQueue((current) =>
         current.map((item) => (item.status === "complete" ? item : { ...item, status: item.status === "running" ? "cancelled" : item.status })),
       );
+      setArchitectureCompareResults((current) =>
+        Object.fromEntries(
+          Object.entries(current).map(([id, result]) => [id, result.status === "running" || result.status === "queued" ? { ...result, status: "cancelled" as const, updatedAt: new Date().toISOString() } : result]),
+        ),
+      );
       setNotice({ tone: "bad", text: activeRunId ? "Current generated run cancelled." : "Queue stop requested." });
     } catch (error) {
       setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Could not cancel the current run." });
     } finally {
       setQueueBusy(false);
+      setArchitectureCompareBusy(false);
       setTrainingBusy(false);
       void loadGeneratedMetrics();
       void loadGeneratedRuns();
@@ -1292,13 +1378,18 @@ export default function Home() {
       <ArchitectureLibraryPanel
         architectures={architectures}
         selectedId={selectedArchitectureId}
+        compareIds={compareArchitectureIds}
+        compareResults={architectureCompareResults}
         runHistory={runHistory}
         currentTopologyId={currentTopologyId}
-        busy={architectureBusy}
+        busy={architectureBusy || architectureCompareBusy}
+        compareBusy={architectureCompareBusy}
         onLoad={(id) => void loadArchitecture(id)}
         onSave={() => void saveCurrentArchitecture()}
         onDuplicate={() => void duplicateArchitecture()}
         onArchive={() => void archiveArchitecture()}
+        onToggleCompare={toggleCompareArchitecture}
+        onRunCompare={() => void runArchitectureCompare()}
       />
 
       <GeneratedTrainingPanel
@@ -1598,25 +1689,36 @@ export default function Home() {
 function ArchitectureLibraryPanel({
   architectures,
   selectedId,
+  compareIds,
+  compareResults,
   runHistory,
   currentTopologyId,
   busy,
+  compareBusy,
   onLoad,
   onSave,
   onDuplicate,
   onArchive,
+  onToggleCompare,
+  onRunCompare,
 }: {
   architectures: ArchitectureSummary[];
   selectedId: string;
+  compareIds: string[];
+  compareResults: Record<string, ArchitectureCompareResult>;
   runHistory: GeneratedRunSummary[];
   currentTopologyId: string;
   busy: boolean;
+  compareBusy: boolean;
   onLoad: (id: string) => void;
   onSave: () => void;
   onDuplicate: () => void;
   onArchive: () => void;
+  onToggleCompare: (id: string) => void;
+  onRunCompare: () => void;
 }) {
   const selectedArchitecture = architectures.find((architecture) => architecture.id === selectedId);
+  const comparedArchitectures = compareIds.map((id) => architectures.find((architecture) => architecture.id === id)).filter((architecture): architecture is ArchitectureSummary => Boolean(architecture));
   const canvasMatchesSelected = selectedArchitecture ? selectedArchitecture.topologyId === currentTopologyId : true;
 
   return (
@@ -1663,12 +1765,21 @@ function ArchitectureLibraryPanel({
           <small>from saved run history</small>
         </div>
       </div>
+      <ArchitectureComparePanel
+        architectures={comparedArchitectures}
+        results={compareResults}
+        runHistory={runHistory}
+        busy={compareBusy}
+        onRun={onRunCompare}
+        onLoad={onLoad}
+      />
       <div className="architectureLibraryGrid">
         {architectures.map((architecture) => {
           const stats = architectureRunStats(architecture, runHistory);
           const selected = architecture.id === selectedId;
+          const compared = compareIds.includes(architecture.id);
           return (
-            <button className={`architectureCard ${selected ? "selected" : ""}`} key={architecture.id} type="button" onClick={() => onLoad(architecture.id)} disabled={busy}>
+            <div className={`architectureCard ${selected ? "selected" : ""} ${compared ? "compared" : ""}`} key={architecture.id}>
               <span className="architectureCardTitle">
                 <strong>{architecture.name}</strong>
                 {selected ? <CheckCircle2 size={17} /> : <FolderOpen size={17} />}
@@ -1698,11 +1809,136 @@ function ArchitectureLibraryPanel({
                   <strong>{stats.lastTrained ? formatShortDate(stats.lastTrained) : "-"}</strong>
                 </span>
               </span>
-            </button>
+              <span className="architectureCardActions">
+                <button className={compared ? "selected" : ""} type="button" onClick={() => onToggleCompare(architecture.id)} disabled={busy}>
+                  <ListChecks size={15} />
+                  {compared ? "Compared" : "Compare"}
+                </button>
+                <button type="button" onClick={() => onLoad(architecture.id)} disabled={busy}>
+                  <FolderOpen size={15} />
+                  Load
+                </button>
+              </span>
+            </div>
           );
         })}
       </div>
     </section>
+  );
+}
+
+function ArchitectureComparePanel({
+  architectures,
+  results,
+  runHistory,
+  busy,
+  onRun,
+  onLoad,
+}: {
+  architectures: ArchitectureSummary[];
+  results: Record<string, ArchitectureCompareResult>;
+  runHistory: GeneratedRunSummary[];
+  busy: boolean;
+  onRun: () => void;
+  onLoad: (id: string) => void;
+}) {
+  return (
+    <div className="architectureComparePanel">
+      <div className="architectureCompareHeader">
+        <div>
+          <strong>Architecture compare</strong>
+          <span>{architectures.length} selected / choose 2-4</span>
+        </div>
+        <button type="button" onClick={onRun} disabled={busy || architectures.length < 2}>
+          {busy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
+          Run selected architectures
+        </button>
+      </div>
+      <div className="architectureCompareGrid" style={{ "--compare-columns": Math.max(2, architectures.length) } as CSSProperties}>
+        {architectures.map((architecture) => {
+          const resolution = resolveTopology(architecture.project);
+          const stats = architectureRunStats(architecture, runHistory);
+          const compareResult = results[architecture.id];
+          const displayedMetrics = compareResult?.metrics;
+          return (
+            <div className={`architectureCompareCard ${compareResult?.status ?? ""}`} key={architecture.id}>
+              <TopologyThumbnail project={architecture.project} />
+              <div className="architectureCompareTitle">
+                <strong>{architecture.name}</strong>
+                <span>{compareResult?.status ?? "ready"}</span>
+              </div>
+              <div className="architectureCompareFacts">
+                <span>
+                  Blocks
+                  <strong>{resolution.residualPaths}</strong>
+                </span>
+                <span>
+                  Aux
+                  <strong>{resolution.auxiliaryHeads}</strong>
+                </span>
+                <span>
+                  Pooling
+                  <strong>{poolingModeLabel(architecture.project)}</strong>
+                </span>
+                <span>
+                  Embed
+                  <strong>{resolution.embeddingDimension ?? "-"}D</strong>
+                </span>
+                <span>
+                  Params
+                  <strong>{formatCompactNumber(resolution.totalParameters)}</strong>
+                </span>
+                <span>
+                  FLOPs
+                  <strong>{formatCompactNumber(resolution.totalFlops)}</strong>
+                </span>
+                <span>
+                  Best
+                  <strong>{formatMaybePercent(displayedMetrics?.best_accuracy ?? displayedMetrics?.test_accuracy ?? stats.bestAccuracy)}</strong>
+                </span>
+                <span>
+                  Replay
+                  <strong>{latestReplayStatusForTopology(architecture.topologyId, runHistory)}</strong>
+                </span>
+              </div>
+              {compareResult?.runId ? <small>Run {formatRunLabel(compareResult.runId)}</small> : <small>{stats.bestRunId ? `Best ${formatRunLabel(stats.bestRunId)}` : "No run yet"}</small>}
+              {compareResult?.error ? <small className="errorText">{compareResult.error}</small> : null}
+              <button type="button" onClick={() => onLoad(architecture.id)} disabled={busy}>
+                <FolderOpen size={15} />
+                Load this architecture
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TopologyThumbnail({ project }: { project: TopologyProject }) {
+  const nodes = project.nodes.filter((node) => node.kind !== "auxiliary_classifier");
+  const minX = Math.min(...nodes.map((node) => node.position.x));
+  const maxX = Math.max(...nodes.map((node) => node.position.x + 158));
+  const minY = Math.min(...nodes.map((node) => node.position.y));
+  const maxY = Math.max(...nodes.map((node) => node.position.y + 88));
+  const viewBox = `${minX - 30} ${minY - 30} ${Math.max(1, maxX - minX + 60)} ${Math.max(1, maxY - minY + 60)}`;
+  const nodeById = new Map(project.nodes.map((node) => [node.id, node]));
+  return (
+    <svg className="topologyThumbnail" viewBox={viewBox} aria-hidden="true">
+      {project.edges
+        .filter((edge) => edge.branch !== "auxiliary")
+        .map((edge) => {
+          const source = nodeById.get(edge.source);
+          const target = nodeById.get(edge.target);
+          if (!source || !target) {
+            return null;
+          }
+          return <line key={edge.id} x1={source.position.x + 158} y1={source.position.y + 44} x2={target.position.x} y2={target.position.y + 44} />;
+        })}
+      {nodes.map((node) => (
+        <rect key={node.id} x={node.position.x} y={node.position.y} width={158} height={88} rx={8} />
+      ))}
+    </svg>
   );
 }
 
@@ -3418,10 +3654,13 @@ function formatRunLabel(runId: string) {
 }
 
 function topologySummary(project: TopologyProject, resolution: ReturnType<typeof resolveTopology>) {
-  const pooling = project.nodes.find((node) => node.kind === "pooling_fusion");
-  const poolingLabel = pooling?.parameters.mode === "gap" ? "GAP" : "GAP + GMP";
   const auxLabel = resolution.auxiliaryHeads === 1 ? "1 aux head" : `${resolution.auxiliaryHeads} aux heads`;
-  return `${resolution.residualPaths} residual blocks / ${auxLabel} / ${poolingLabel} / ${resolution.embeddingDimension ?? "-"}D embedding`;
+  return `${resolution.residualPaths} residual blocks / ${auxLabel} / ${poolingModeLabel(project)} / ${resolution.embeddingDimension ?? "-"}D embedding`;
+}
+
+function poolingModeLabel(project: TopologyProject) {
+  const pooling = project.nodes.find((node) => node.kind === "pooling_fusion");
+  return pooling?.parameters.mode === "gap" ? "GAP" : "GAP + GMP";
 }
 
 function formatShortDate(value: string) {

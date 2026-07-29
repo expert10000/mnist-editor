@@ -507,6 +507,143 @@ h1 {
   font-weight: 800;
 }
 
+.trainingBudgetPanel {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(36, 87, 166, 0.22);
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.trainingBudgetPanel.moderate {
+  border-color: rgba(168, 100, 19, 0.28);
+  background: #fffaf0;
+}
+
+.trainingBudgetPanel.expensive {
+  border-color: rgba(176, 48, 48, 0.25);
+  background: #fff7f7;
+}
+
+.trainingBudgetHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.trainingBudgetHeader div {
+  display: grid;
+  gap: 2px;
+}
+
+.trainingBudgetHeader strong {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.trainingBudgetHeader span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.costBadge {
+  min-width: 86px;
+  padding: 6px 8px;
+  border: 1px solid rgba(23, 114, 69, 0.24);
+  border-radius: 999px;
+  background: #f4faf6;
+  color: var(--green);
+  font-size: 0.78rem;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.costBadge.moderate {
+  border-color: rgba(168, 100, 19, 0.28);
+  background: #fff4d8;
+  color: var(--amber);
+}
+
+.costBadge.expensive {
+  border-color: rgba(176, 48, 48, 0.28);
+  background: #ffecec;
+  color: #9f2b2b;
+}
+
+.trainingBudgetMetrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.trainingBudgetMetrics span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.trainingBudgetMetrics strong {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trainingBudgetWarning,
+.trainingBudgetOk {
+  padding: 7px 9px;
+  border-radius: 7px;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.trainingBudgetWarning {
+  border: 1px solid rgba(168, 100, 19, 0.24);
+  background: #fffaf0;
+  color: #8b5a13;
+}
+
+.trainingBudgetOk {
+  border: 1px solid rgba(23, 114, 69, 0.22);
+  background: #f4faf6;
+  color: var(--green);
+}
+
+.trainingBudgetActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trainingBudgetActions button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--blue);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.trainingBudgetActions button:disabled {
+  color: #9aa6b5;
+  cursor: not-allowed;
+}
+
 .winnerAnalysisPanel {
   display: grid;
   gap: 10px;
@@ -1923,6 +2060,8 @@ h1 {
   .architectureCompareGrid,
   .architectureCompareSessionBar,
   .architectureWinnerActions,
+  .trainingBudgetMetrics,
+  .trainingBudgetActions,
   .winnerAnalysisMetrics,
   .winnerRecommendedActions,
   .trainingControls,

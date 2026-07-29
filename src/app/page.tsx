@@ -255,6 +255,14 @@ type WinnerAnalysis = {
   warnings: string[];
   recommendedAction: string;
 } | null;
+type TrainingBudget = {
+  totalBatches: number;
+  estimatedRuntime: number | null;
+  datasetLabel: string;
+  costLabel: "cheap" | "moderate" | "expensive";
+  mixedSettings: boolean;
+  settingKeys: string[];
+};
 type AblationQueueItem = {
   id: string;
   label: string;
@@ -732,10 +740,18 @@ export default function Home() {
     setNotice({ tone: "good", text: "Architecture comparison cleared." });
   }
 
+  function normalizeCompareSettings() {
+    setArchitectureCompareResults({});
+    setNotice({ tone: "good", text: "Compare settings normalized. Previous mixed compare results cleared; the next compare uses the current run settings for every architecture." });
+  }
+
   async function runArchitectureCompare(settingsOverride = trainSettings) {
     const selectedArchitectures = compareArchitectureIds.map((id) => architectures.find((architecture) => architecture.id === id)).filter((architecture): architecture is ArchitectureSummary => Boolean(architecture));
     if (selectedArchitectures.length < 2) {
       setNotice({ tone: "bad", text: "Select at least 2 architectures to compare." });
+      return;
+    }
+    if (!window.confirm(`Run ${selectedArchitectures.length} architectures with the same seed ${settingsOverride.seed}, LR ${settingsOverride.learningRate}, ${settingsOverride.epochs} epoch${settingsOverride.epochs === 1 ? "" : "s"}?`)) {
       return;
     }
     setArchitectureCompareBusy(true);
@@ -1675,6 +1691,7 @@ export default function Home() {
         onSaveComparison={() => void saveComparisonSession()}
         onExportComparison={exportComparisonReport}
         onClearComparison={clearArchitectureCompare}
+        onNormalizeCompare={normalizeCompareSettings}
         onSaveWinner={() => void saveComparisonWinnerAsArchitecture("save")}
         onDuplicateWinner={() => void saveComparisonWinnerAsArchitecture("duplicate")}
         onStartWinnerQueue={() => void startVariantQueueFromComparisonWinner()}
@@ -2005,6 +2022,7 @@ function ArchitectureLibraryPanel({
   onSaveComparison,
   onExportComparison,
   onClearComparison,
+  onNormalizeCompare,
   onSaveWinner,
   onDuplicateWinner,
   onStartWinnerQueue,
@@ -2039,6 +2057,7 @@ function ArchitectureLibraryPanel({
   onSaveComparison: () => void;
   onExportComparison: (format: "json" | "csv") => void;
   onClearComparison: () => void;
+  onNormalizeCompare: () => void;
   onSaveWinner: () => void;
   onDuplicateWinner: () => void;
   onStartWinnerQueue: () => void;
@@ -2114,6 +2133,7 @@ function ArchitectureLibraryPanel({
         onSaveSession={onSaveComparison}
         onExport={onExportComparison}
         onClear={onClearComparison}
+        onNormalize={onNormalizeCompare}
         onSaveWinner={onSaveWinner}
         onDuplicateWinner={onDuplicateWinner}
         onStartWinnerQueue={onStartWinnerQueue}
@@ -2201,6 +2221,7 @@ function ArchitectureComparePanel({
   onSaveSession,
   onExport,
   onClear,
+  onNormalize,
   onLoadBest,
   onSaveWinner,
   onDuplicateWinner,
@@ -2228,6 +2249,7 @@ function ArchitectureComparePanel({
   onSaveSession: () => void;
   onExport: (format: "json" | "csv") => void;
   onClear: () => void;
+  onNormalize: () => void;
   onLoadBest: () => void;
   onSaveWinner: () => void;
   onDuplicateWinner: () => void;
@@ -2239,6 +2261,7 @@ function ArchitectureComparePanel({
 }) {
   const bestArchitecture = bestArchitectureComparison(architectures, runHistory, results);
   const winnerAnalysis = buildWinnerAnalysis(architectures, runHistory, results, settings);
+  const trainingBudget = buildTrainingBudget(architectures, runHistory, results, settings);
   const winnerLocked = Boolean(bestArchitecture && lockedWinner?.architectureId === bestArchitecture.id);
   return (
     <div className="architectureComparePanel">
@@ -2298,6 +2321,7 @@ function ArchitectureComparePanel({
           CSV
         </button>
       </div>
+      <TrainingBudgetPanel budget={trainingBudget} settings={settings} busy={busy} onNormalize={onNormalize} onRunSameSettings={onRun} />
       <div className="architectureWinnerActions">
         <div>
           <strong>{bestArchitecture ? `Winner: ${bestArchitecture.name}` : "No winner yet"}</strong>
@@ -2394,6 +2418,76 @@ function ArchitectureComparePanel({
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function TrainingBudgetPanel({
+  budget,
+  settings,
+  busy,
+  onNormalize,
+  onRunSameSettings,
+}: {
+  budget: TrainingBudget;
+  settings: TrainSettings;
+  busy: boolean;
+  onNormalize: () => void;
+  onRunSameSettings: () => void;
+}) {
+  return (
+    <div className={`trainingBudgetPanel ${budget.costLabel}`}>
+      <div className="trainingBudgetHeader">
+        <div>
+          <p className="eyebrow">Training budget</p>
+          <strong>{budget.datasetLabel}</strong>
+          <span>
+            {RUN_PRESET_LABELS[settings.preset]} / seed {settings.seed} / LR {formatLearningRate(settings.learningRate)}
+          </span>
+        </div>
+        <strong className={`costBadge ${budget.costLabel}`}>{budget.costLabel}</strong>
+      </div>
+      <div className="trainingBudgetMetrics">
+        <span>
+          Est. batches
+          <strong>{budget.totalBatches}</strong>
+        </span>
+        <span>
+          Est. runtime
+          <strong>{formatRuntimeEstimate(budget.estimatedRuntime)}</strong>
+        </span>
+        <span>
+          Train samples
+          <strong>{settings.trainLimit.toLocaleString()}</strong>
+        </span>
+        <span>
+          Test samples
+          <strong>{settings.testLimit.toLocaleString()}</strong>
+        </span>
+        <span>
+          Epochs
+          <strong>{settings.epochs}</strong>
+        </span>
+        <span>
+          Batch
+          <strong>{settings.batchSize}</strong>
+        </span>
+      </div>
+      {budget.mixedSettings ? (
+        <div className="trainingBudgetWarning">Mixed run settings detected across selected results: {budget.settingKeys.slice(0, 3).join(" / ")}.</div>
+      ) : (
+        <div className="trainingBudgetOk">Selected compare results use matching settings, or no prior results are loaded.</div>
+      )}
+      <div className="trainingBudgetActions">
+        <button type="button" onClick={onNormalize} disabled={busy}>
+          <RefreshCw size={16} />
+          Normalize compare settings
+        </button>
+        <button type="button" onClick={onRunSameSettings} disabled={busy}>
+          <Play size={16} />
+          Run same seed/settings for all selected
+        </button>
       </div>
     </div>
   );
@@ -4019,6 +4113,45 @@ function architectureComparisonMetrics(architecture: ArchitectureSummary, runHis
   return results[architecture.id]?.metrics ?? architectureBestRun(architecture, runHistory)?.metrics ?? null;
 }
 
+function buildTrainingBudget(
+  architectures: ArchitectureSummary[],
+  runHistory: GeneratedRunSummary[],
+  results: Record<string, ArchitectureCompareResult>,
+  settings: TrainSettings,
+): TrainingBudget {
+  const batchesPerEpoch = Math.max(1, Math.ceil(settings.trainLimit / Math.max(1, settings.batchSize)));
+  const totalBatches = architectures.length * settings.epochs * batchesPerEpoch;
+  const knownSecondsPerBatch = architectures
+    .map((architecture) => architectureComparisonMetrics(architecture, runHistory, results))
+    .filter((metrics): metrics is NonNullable<GeneratedTrainMetrics> => Boolean(metrics?.duration_seconds && metrics.total_batches))
+    .map((metrics) => (metrics.duration_seconds ?? 0) / Math.max(1, metrics.total_batches ?? 1));
+  const secondsPerBatch = knownSecondsPerBatch.length > 0 ? knownSecondsPerBatch.reduce((sum, value) => sum + value, 0) / knownSecondsPerBatch.length : null;
+  const estimatedRuntime = secondsPerBatch === null ? null : secondsPerBatch * totalBatches;
+  const sampleBudget = settings.epochs * settings.trainLimit;
+  const datasetLabel = sampleBudget <= 1500 ? "tiny compiler check" : sampleBudget <= 8192 ? "meaningful comparison" : "stronger evidence";
+  const costLabel: TrainingBudget["costLabel"] = totalBatches <= 24 ? "cheap" : totalBatches <= 96 ? "moderate" : "expensive";
+  const settingKeys = Array.from(
+    new Set(
+      architectures
+        .map((architecture) => results[architecture.id]?.metrics ?? null)
+        .filter((metrics): metrics is NonNullable<GeneratedTrainMetrics> => Boolean(metrics))
+        .map(runSettingKey),
+    ),
+  );
+  return {
+    totalBatches,
+    estimatedRuntime,
+    datasetLabel,
+    costLabel,
+    mixedSettings: settingKeys.length > 1,
+    settingKeys,
+  };
+}
+
+function runSettingKey(metrics: NonNullable<GeneratedTrainMetrics>) {
+  return `e${metrics.epochs}/train${metrics.train_limit}/test${metrics.test_limit}/batch${metrics.batch_size ?? "-"}/lr${metrics.learning_rate ?? "-"}/seed${metrics.seed ?? "-"}`;
+}
+
 function buildArchitectureWinnerSummary(
   winner: ArchitectureSummary,
   architectures: ArchitectureSummary[],
@@ -4510,6 +4643,18 @@ function formatDurationDelta(value: number | null | undefined) {
   }
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(1)}s`;
+}
+
+function formatRuntimeEstimate(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  if (value < 90) {
+    return `${value.toFixed(0)}s`;
+  }
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.round(value % 60);
+  return `${minutes}m ${seconds}s`;
 }
 
 function formatEfficiency(value: number | null | undefined) {

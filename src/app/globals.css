@@ -644,6 +644,142 @@ h1 {
   cursor: not-allowed;
 }
 
+.fairnessPanel {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(23, 114, 69, 0.22);
+  border-radius: 8px;
+  background: #f4faf6;
+}
+
+.fairnessPanel.mixed {
+  border-color: rgba(168, 100, 19, 0.28);
+  background: #fffaf0;
+}
+
+.fairnessPanel.stale {
+  border-color: rgba(176, 48, 48, 0.25);
+  background: #fff7f7;
+}
+
+.fairnessHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fairnessHeader div {
+  display: grid;
+  gap: 2px;
+}
+
+.fairnessHeader strong {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.fairnessHeader span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.fairnessBadge,
+.fairnessChip {
+  padding: 5px 8px;
+  border: 1px solid rgba(23, 114, 69, 0.24);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--green);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.fairnessBadge {
+  min-width: 80px;
+}
+
+.fairnessBadge.mixed,
+.fairnessChip.mixed {
+  border-color: rgba(168, 100, 19, 0.28);
+  color: var(--amber);
+}
+
+.fairnessBadge.stale,
+.fairnessChip.stale {
+  border-color: rgba(176, 48, 48, 0.28);
+  color: #9f2b2b;
+}
+
+.fairnessList {
+  display: grid;
+  gap: 6px;
+}
+
+.fairnessList span {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 68px minmax(0, 2fr);
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.fairnessList strong {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fairnessList em {
+  color: var(--green);
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.fairnessList .mixed em {
+  color: var(--amber);
+}
+
+.fairnessList .stale em {
+  color: #9f2b2b;
+}
+
+.fairnessActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.fairnessActions button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--blue);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.fairnessActions button:disabled {
+  color: #9aa6b5;
+  cursor: not-allowed;
+}
+
 .winnerAnalysisPanel {
   display: grid;
   gap: 10px;
@@ -829,6 +965,14 @@ h1 {
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 900;
+}
+
+.fairnessReason {
+  min-height: 24px;
+  padding: 5px 7px;
+  border: 1px solid rgba(168, 100, 19, 0.22);
+  border-radius: 7px;
+  background: #fffaf0;
 }
 
 .architectureCompareFacts {
@@ -2062,6 +2206,8 @@ h1 {
   .architectureWinnerActions,
   .trainingBudgetMetrics,
   .trainingBudgetActions,
+  .fairnessActions,
+  .fairnessList span,
   .winnerAnalysisMetrics,
   .winnerRecommendedActions,
   .trainingControls,

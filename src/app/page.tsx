@@ -204,6 +204,18 @@ type ArchitectureCompareResult = {
   error?: string;
   updatedAt?: string;
 };
+type CompareFairnessStatus = "fair" | "mixed" | "stale";
+type CompareFairnessItem = {
+  architectureId: string;
+  status: CompareFairnessStatus;
+  reasons: string[];
+  mismatchedFields: string[];
+};
+type CompareFairnessSummary = {
+  status: CompareFairnessStatus;
+  items: CompareFairnessItem[];
+  unfairArchitectureIds: string[];
+};
 type ComparisonSummary = {
   name: string;
   displayName?: string;
@@ -211,6 +223,7 @@ type ComparisonSummary = {
   winnerArchitectureId: string;
   architectureCount: number;
   bestAccuracy: number | null;
+  fairnessStatus?: CompareFairnessStatus;
 };
 type ComparisonSession = {
   name: string;
@@ -225,10 +238,11 @@ type ComparisonSession = {
   actionHistory: ComparisonAction[];
   lockedWinner: ComparisonLockedWinner | null;
   reportRows: ReturnType<typeof buildArchitectureCompareReportRows>;
+  fairness: CompareFairnessSummary | null;
 };
 type ComparisonAction = {
   at: string;
-  type: "save-winner" | "duplicate-winner" | "start-queue" | "lock-winner";
+  type: "save-winner" | "duplicate-winner" | "start-queue" | "lock-winner" | "rerun-unfair";
   architectureId: string;
   architectureName: string;
   detail: string;
@@ -745,14 +759,14 @@ export default function Home() {
     setNotice({ tone: "good", text: "Compare settings normalized. Previous mixed compare results cleared; the next compare uses the current run settings for every architecture." });
   }
 
-  async function runArchitectureCompare(settingsOverride = trainSettings) {
-    const selectedArchitectures = compareArchitectureIds.map((id) => architectures.find((architecture) => architecture.id === id)).filter((architecture): architecture is ArchitectureSummary => Boolean(architecture));
-    if (selectedArchitectures.length < 2) {
+  async function runArchitectureCompare(settingsOverride = trainSettings, targets?: ArchitectureSummary[]) {
+    const selectedArchitectures = targets ?? currentComparedArchitectures();
+    if (selectedArchitectures.length < (targets ? 1 : 2)) {
       setNotice({ tone: "bad", text: "Select at least 2 architectures to compare." });
-      return;
+      return false;
     }
     if (!window.confirm(`Run ${selectedArchitectures.length} architectures with the same seed ${settingsOverride.seed}, LR ${settingsOverride.learningRate}, ${settingsOverride.epochs} epoch${settingsOverride.epochs === 1 ? "" : "s"}?`)) {
-      return;
+      return false;
     }
     setArchitectureCompareBusy(true);
     setTrainingBusy(true);
@@ -791,14 +805,31 @@ export default function Home() {
         }
       }
       setNotice({ tone: "good", text: "Architecture compare completed." });
+      return true;
     } catch (error) {
       setNotice({ tone: "bad", text: error instanceof Error ? error.message : "Architecture compare failed." });
+      return false;
     } finally {
       setArchitectureCompareBusy(false);
       setTrainingBusy(false);
       setActiveRunId(null);
       void loadGeneratedMetrics();
       void loadGeneratedRuns();
+    }
+  }
+
+  async function rerunUnfairComparisonEntries() {
+    const selectedArchitectures = currentComparedArchitectures();
+    const fairness = buildCompareFairness(selectedArchitectures, architectureCompareResults, trainSettings);
+    const rerunArchitectures = selectedArchitectures.filter((architecture) => fairness.unfairArchitectureIds.includes(architecture.id));
+    if (rerunArchitectures.length === 0) {
+      setNotice({ tone: "good", text: "All selected comparison results are already fair." });
+      return;
+    }
+    const started = await runArchitectureCompare(trainSettings, rerunArchitectures);
+    const target = rerunArchitectures[0] ?? selectedArchitectures[0];
+    if (started && target) {
+      setComparisonActionHistory((current) => [comparisonAction("rerun-unfair", target, `${rerunArchitectures.length} unfair comparison entries rerun with current settings`), ...current].slice(0, 30));
     }
   }
 
@@ -812,6 +843,7 @@ export default function Home() {
     setComparisonName(name);
     const rows = buildArchitectureCompareReportRows(selectedArchitectures, runHistory, architectureCompareResults, trainSettings);
     const winner = bestArchitectureComparison(selectedArchitectures, runHistory, architectureCompareResults);
+    const fairness = buildCompareFairness(selectedArchitectures, architectureCompareResults, trainSettings);
     const selectedResults = Object.fromEntries(selectedArchitectures.map((architecture) => [architecture.id, architectureCompareResults[architecture.id]]).filter((entry): entry is [string, ArchitectureCompareResult] => Boolean(entry[1])));
     const nextActionHistory = options.action ? [options.action, ...comparisonActionHistory].slice(0, 30) : comparisonActionHistory;
     const nextLockedWinner = options.lockedWinner === undefined ? lockedComparisonWinner : options.lockedWinner;
@@ -828,6 +860,7 @@ export default function Home() {
         actionHistory: nextActionHistory,
         lockedWinner: nextLockedWinner,
         reportRows: rows,
+        fairness,
       }),
     });
     const payload = await response.json().catch(() => null);
@@ -879,13 +912,14 @@ export default function Home() {
     const rows = buildArchitectureCompareReportRows(selectedArchitectures, runHistory, architectureCompareResults, trainSettings);
     const winner = bestArchitectureComparison(selectedArchitectures, runHistory, architectureCompareResults);
     const winnerSummary = winner ? buildArchitectureWinnerSummary(winner, selectedArchitectures, runHistory, architectureCompareResults, trainSettings) : null;
+    const fairness = buildCompareFairness(selectedArchitectures, architectureCompareResults, trainSettings);
     if (rows.length === 0) {
       setNotice({ tone: "bad", text: "No architecture comparison to export yet." });
       return;
     }
     const safeName = slugName(comparisonName || "architecture-comparison");
     if (format === "json") {
-      downloadTextFile(`${safeName}-comparison.json`, JSON.stringify({ exportedAt: new Date().toISOString(), winnerSummary, rows }, null, 2), "application/json");
+      downloadTextFile(`${safeName}-comparison.json`, JSON.stringify({ exportedAt: new Date().toISOString(), fairness, winnerSummary, rows }, null, 2), "application/json");
       setNotice({ tone: "good", text: "Architecture comparison JSON exported." });
       return;
     }
@@ -959,6 +993,19 @@ export default function Home() {
     if (!winner) {
       setNotice({ tone: "bad", text: "No comparison winner to lock yet." });
       return;
+    }
+    const fairness = buildCompareFairness(currentComparedArchitectures(), architectureCompareResults, trainSettings);
+    if (fairness.status !== "fair") {
+      const reason = fairness.items
+        .filter((item) => item.status !== "fair")
+        .slice(0, 3)
+        .map((item) => `${item.architectureId}: ${item.reasons[0] ?? item.status}`)
+        .join("\n");
+      const confirmed = window.confirm(`This comparison is ${fairness.status}, so the winner is not fully fair.\n\n${reason}\n\nLock winner anyway?`);
+      if (!confirmed) {
+        setNotice({ tone: "bad", text: "Winner lock cancelled because comparison is not fair." });
+        return;
+      }
     }
     const summary = buildArchitectureWinnerSummary(winner, currentComparedArchitectures(), runHistory, architectureCompareResults, trainSettings);
     const lockedWinner: ComparisonLockedWinner = {
@@ -1692,6 +1739,7 @@ export default function Home() {
         onExportComparison={exportComparisonReport}
         onClearComparison={clearArchitectureCompare}
         onNormalizeCompare={normalizeCompareSettings}
+        onRerunUnfairCompare={() => void rerunUnfairComparisonEntries()}
         onSaveWinner={() => void saveComparisonWinnerAsArchitecture("save")}
         onDuplicateWinner={() => void saveComparisonWinnerAsArchitecture("duplicate")}
         onStartWinnerQueue={() => void startVariantQueueFromComparisonWinner()}
@@ -2023,6 +2071,7 @@ function ArchitectureLibraryPanel({
   onExportComparison,
   onClearComparison,
   onNormalizeCompare,
+  onRerunUnfairCompare,
   onSaveWinner,
   onDuplicateWinner,
   onStartWinnerQueue,
@@ -2058,6 +2107,7 @@ function ArchitectureLibraryPanel({
   onExportComparison: (format: "json" | "csv") => void;
   onClearComparison: () => void;
   onNormalizeCompare: () => void;
+  onRerunUnfairCompare: () => void;
   onSaveWinner: () => void;
   onDuplicateWinner: () => void;
   onStartWinnerQueue: () => void;
@@ -2134,6 +2184,7 @@ function ArchitectureLibraryPanel({
         onExport={onExportComparison}
         onClear={onClearComparison}
         onNormalize={onNormalizeCompare}
+        onRerunUnfair={onRerunUnfairCompare}
         onSaveWinner={onSaveWinner}
         onDuplicateWinner={onDuplicateWinner}
         onStartWinnerQueue={onStartWinnerQueue}
@@ -2222,6 +2273,7 @@ function ArchitectureComparePanel({
   onExport,
   onClear,
   onNormalize,
+  onRerunUnfair,
   onLoadBest,
   onSaveWinner,
   onDuplicateWinner,
@@ -2250,6 +2302,7 @@ function ArchitectureComparePanel({
   onExport: (format: "json" | "csv") => void;
   onClear: () => void;
   onNormalize: () => void;
+  onRerunUnfair: () => void;
   onLoadBest: () => void;
   onSaveWinner: () => void;
   onDuplicateWinner: () => void;
@@ -2262,6 +2315,7 @@ function ArchitectureComparePanel({
   const bestArchitecture = bestArchitectureComparison(architectures, runHistory, results);
   const winnerAnalysis = buildWinnerAnalysis(architectures, runHistory, results, settings);
   const trainingBudget = buildTrainingBudget(architectures, runHistory, results, settings);
+  const fairness = buildCompareFairness(architectures, results, settings);
   const winnerLocked = Boolean(bestArchitecture && lockedWinner?.architectureId === bestArchitecture.id);
   return (
     <div className="architectureComparePanel">
@@ -2299,7 +2353,9 @@ function ArchitectureComparePanel({
             <option value="">{sessionsBusy ? "Loading..." : "Load comparison"}</option>
             {savedComparisons.map((comparison) => (
               <option key={comparison.name} value={comparison.name}>
-                {(comparison.displayName ?? comparison.name) + (comparison.bestAccuracy !== null ? ` / ${formatMaybePercent(comparison.bestAccuracy)}` : "")}
+                {(comparison.displayName ?? comparison.name) +
+                  (comparison.bestAccuracy !== null ? ` / ${formatMaybePercent(comparison.bestAccuracy)}` : "") +
+                  (comparison.fairnessStatus ? ` / ${comparison.fairnessStatus}` : "")}
               </option>
             ))}
           </select>
@@ -2322,6 +2378,7 @@ function ArchitectureComparePanel({
         </button>
       </div>
       <TrainingBudgetPanel budget={trainingBudget} settings={settings} busy={busy} onNormalize={onNormalize} onRunSameSettings={onRun} />
+      <FairnessGuardrailsPanel fairness={fairness} architectures={architectures} busy={busy} onNormalize={onNormalize} onRerunUnfair={onRerunUnfair} />
       <div className="architectureWinnerActions">
         <div>
           <strong>{bestArchitecture ? `Winner: ${bestArchitecture.name}` : "No winner yet"}</strong>
@@ -2368,13 +2425,15 @@ function ArchitectureComparePanel({
           const stats = architectureRunStats(architecture, runHistory);
           const compareResult = results[architecture.id];
           const displayedMetrics = compareResult?.metrics;
+          const fairnessItem = fairness.items.find((item) => item.architectureId === architecture.id);
           return (
             <div className={`architectureCompareCard ${compareResult?.status ?? ""}`} key={architecture.id}>
               <TopologyThumbnail project={architecture.project} />
               <div className="architectureCompareTitle">
                 <strong>{architecture.name}</strong>
-                <span>{compareResult?.status ?? "ready"}</span>
+                <span>{compareResult?.status ?? "ready"} / {fairnessItem?.status ?? "stale"}</span>
               </div>
+              <div className={`fairnessChip ${fairnessItem?.status ?? "stale"}`}>{fairnessItem?.status ?? "stale"}</div>
               <div className="architectureCompareFacts">
                 <span>
                   Blocks
@@ -2410,6 +2469,7 @@ function ArchitectureComparePanel({
                 </span>
               </div>
               {compareResult?.runId ? <small>Run {formatRunLabel(compareResult.runId)}</small> : <small>{stats.bestRunId ? `Best ${formatRunLabel(stats.bestRunId)}` : "No run yet"}</small>}
+              {fairnessItem && fairnessItem.status !== "fair" ? <small className="fairnessReason">{fairnessItem.reasons.slice(0, 2).join(" / ")}</small> : null}
               {compareResult?.error ? <small className="errorText">{compareResult.error}</small> : null}
               <button type="button" onClick={() => onLoad(architecture.id)} disabled={busy}>
                 <FolderOpen size={15} />
@@ -2418,6 +2478,61 @@ function ArchitectureComparePanel({
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function FairnessGuardrailsPanel({
+  fairness,
+  architectures,
+  busy,
+  onNormalize,
+  onRerunUnfair,
+}: {
+  fairness: CompareFairnessSummary;
+  architectures: ArchitectureSummary[];
+  busy: boolean;
+  onNormalize: () => void;
+  onRerunUnfair: () => void;
+}) {
+  const unfairItems = fairness.items.filter((item) => item.status !== "fair");
+  const title = fairness.status === "fair" ? "Comparison is fair" : fairness.status === "mixed" ? "Mixed compare settings" : "Stale compare entries";
+  const detail =
+    fairness.status === "fair"
+      ? "Every selected architecture has a completed result for the current topology and run settings."
+      : `${unfairItems.length} of ${architectures.length} selected architectures need attention before this is a clean benchmark.`;
+  return (
+    <div className={`fairnessPanel ${fairness.status}`}>
+      <div className="fairnessHeader">
+        <div>
+          <p className="eyebrow">Fairness guardrails</p>
+          <strong>{title}</strong>
+          <span>{detail}</span>
+        </div>
+        <strong className={`fairnessBadge ${fairness.status}`}>{fairness.status}</strong>
+      </div>
+      <div className="fairnessList">
+        {fairness.items.map((item) => {
+          const architecture = architectures.find((candidate) => candidate.id === item.architectureId);
+          return (
+            <span key={item.architectureId} className={item.status}>
+              <strong>{architecture?.name ?? item.architectureId}</strong>
+              <em>{item.status}</em>
+              {item.reasons.length > 0 ? item.reasons.slice(0, 3).join(" / ") : "same seed, LR, epochs, samples, and batch"}
+            </span>
+          );
+        })}
+      </div>
+      <div className="fairnessActions">
+        <button type="button" onClick={onRerunUnfair} disabled={busy || unfairItems.length === 0}>
+          <RefreshCw size={16} />
+          Rerun unfair entries
+        </button>
+        <button type="button" onClick={onNormalize} disabled={busy}>
+          <ListChecks size={16} />
+          Normalize compare settings
+        </button>
       </div>
     </div>
   );
@@ -4007,16 +4122,21 @@ function buildArchitectureCompareReportRows(
   settings: TrainSettings,
 ) {
   const winner = bestArchitectureComparison(architectures, runHistory, results);
+  const fairness = buildCompareFairness(architectures, results, settings);
   return architectures.map((architecture) => {
     const resolution = resolveTopology(architecture.project);
     const result = results[architecture.id];
     const bestRun = architectureBestRun(architecture, runHistory);
     const metrics = result?.metrics ?? bestRun?.metrics;
+    const fairnessItem = fairness.items.find((item) => item.architectureId === architecture.id);
     return {
       architectureId: architecture.id,
       architectureName: architecture.name,
       topologyId: architecture.topologyId,
       status: result?.status ?? bestRun?.status ?? "ready",
+      fairnessStatus: fairnessItem?.status ?? "stale",
+      fairnessReasons: fairnessItem?.reasons.join("; ") ?? "no fairness data",
+      mismatchedSettings: fairnessItem?.mismatchedFields.join("; ") ?? "",
       runId: result?.runId ?? bestRun?.runId ?? "",
       runPath: result?.runId ? `runs/${result.runId}` : bestRun?.runId ? `runs/${bestRun.runId}` : "",
       params: resolution.totalParameters,
@@ -4034,6 +4154,7 @@ function buildArchitectureCompareReportRows(
       epochs: metrics?.epochs ?? settings.epochs,
       trainSamples: metrics?.train_limit ?? settings.trainLimit,
       testSamples: metrics?.test_limit ?? settings.testLimit,
+      batchSize: metrics?.batch_size ?? settings.batchSize,
       replayStatus: latestReplayStatusForTopology(architecture.topologyId, runHistory),
       winner: winner?.id === architecture.id ? "yes" : "",
     };
@@ -4111,6 +4232,68 @@ function buildWinnerAnalysis(
 
 function architectureComparisonMetrics(architecture: ArchitectureSummary, runHistory: GeneratedRunSummary[], results: Record<string, ArchitectureCompareResult>) {
   return results[architecture.id]?.metrics ?? architectureBestRun(architecture, runHistory)?.metrics ?? null;
+}
+
+function buildCompareFairness(architectures: ArchitectureSummary[], results: Record<string, ArchitectureCompareResult>, settings: TrainSettings): CompareFairnessSummary {
+  const items = architectures.map((architecture): CompareFairnessItem => {
+    const result = results[architecture.id];
+    const metrics = result?.metrics;
+    const staleReasons: string[] = [];
+    const mixedReasons: string[] = [];
+    const mismatchedFields: string[] = [];
+    if (!result) {
+      staleReasons.push("no active compare run");
+    } else if (result.status !== "complete") {
+      staleReasons.push(`run is ${result.status}`);
+    }
+    if (!metrics) {
+      staleReasons.push("metrics missing");
+    } else {
+      if (!metrics.topology_id) {
+        staleReasons.push("topology ID missing");
+      } else if (metrics.topology_id !== architecture.topologyId) {
+        staleReasons.push(`topology changed ${shortId(metrics.topology_id)} -> ${shortId(architecture.topologyId)}`);
+      }
+      compareSetting("seed", metrics.seed, settings.seed, mixedReasons, mismatchedFields);
+      compareSetting("LR", metrics.learning_rate, settings.learningRate, mixedReasons, mismatchedFields);
+      compareSetting("epochs", metrics.epochs, settings.epochs, mixedReasons, mismatchedFields);
+      compareSetting("train samples", metrics.train_limit, settings.trainLimit, mixedReasons, mismatchedFields);
+      compareSetting("test samples", metrics.test_limit, settings.testLimit, mixedReasons, mismatchedFields);
+      compareSetting("batch size", metrics.batch_size, settings.batchSize, mixedReasons, mismatchedFields);
+    }
+    if (staleReasons.length > 0) {
+      return { architectureId: architecture.id, status: "stale", reasons: staleReasons, mismatchedFields };
+    }
+    if (mixedReasons.length > 0) {
+      return { architectureId: architecture.id, status: "mixed", reasons: mixedReasons, mismatchedFields };
+    }
+    return { architectureId: architecture.id, status: "fair", reasons: [], mismatchedFields: [] };
+  });
+  const status: CompareFairnessStatus = items.some((item) => item.status === "stale") ? "stale" : items.some((item) => item.status === "mixed") ? "mixed" : "fair";
+  return {
+    status,
+    items,
+    unfairArchitectureIds: items.filter((item) => item.status !== "fair").map((item) => item.architectureId),
+  };
+}
+
+function compareSetting(
+  label: string,
+  actual: number | undefined,
+  expected: number,
+  reasons: string[],
+  mismatchedFields: string[],
+) {
+  if (typeof actual !== "number" || !Number.isFinite(actual)) {
+    reasons.push(`${label} missing`);
+    mismatchedFields.push(label);
+    return;
+  }
+  const matches = label === "LR" ? Math.abs(actual - expected) <= 1e-12 : actual === expected;
+  if (!matches) {
+    reasons.push(`${label} ${actual} != ${expected}`);
+    mismatchedFields.push(label);
+  }
 }
 
 function buildTrainingBudget(
@@ -4309,6 +4492,31 @@ function hydrateComparisonSession(value: unknown): ComparisonSession | null {
     actionHistory: hydrateComparisonActions(value.actionHistory),
     lockedWinner: hydrateLockedWinner(value.lockedWinner),
     reportRows: Array.isArray(value.reportRows) ? (value.reportRows as ReturnType<typeof buildArchitectureCompareReportRows>) : [],
+    fairness: hydrateCompareFairness(value.fairness),
+  };
+}
+
+function hydrateCompareFairness(value: unknown): CompareFairnessSummary | null {
+  if (!isRecord(value) || !isCompareFairnessStatus(value.status) || !Array.isArray(value.items)) {
+    return null;
+  }
+  const items = value.items
+    .map((item): CompareFairnessItem | null => {
+      if (!isRecord(item) || typeof item.architectureId !== "string" || !isCompareFairnessStatus(item.status)) {
+        return null;
+      }
+      return {
+        architectureId: item.architectureId,
+        status: item.status,
+        reasons: Array.isArray(item.reasons) ? item.reasons.filter((reason): reason is string => typeof reason === "string") : [],
+        mismatchedFields: Array.isArray(item.mismatchedFields) ? item.mismatchedFields.filter((field): field is string => typeof field === "string") : [],
+      };
+    })
+    .filter((item): item is CompareFairnessItem => Boolean(item));
+  return {
+    status: value.status,
+    items,
+    unfairArchitectureIds: Array.isArray(value.unfairArchitectureIds) ? value.unfairArchitectureIds.filter((id): id is string => typeof id === "string") : items.filter((item) => item.status !== "fair").map((item) => item.architectureId),
   };
 }
 
@@ -4404,8 +4612,12 @@ function isCompareStatus(value: unknown): value is ArchitectureCompareResult["st
   return value === "queued" || value === "running" || value === "complete" || value === "failed" || value === "cancelled";
 }
 
+function isCompareFairnessStatus(value: unknown): value is CompareFairnessStatus {
+  return value === "fair" || value === "mixed" || value === "stale";
+}
+
 function isComparisonActionType(value: unknown): value is ComparisonAction["type"] {
-  return value === "save-winner" || value === "duplicate-winner" || value === "start-queue" || value === "lock-winner";
+  return value === "save-winner" || value === "duplicate-winner" || value === "start-queue" || value === "lock-winner" || value === "rerun-unfair";
 }
 
 function defaultExperimentName(preset: QueuePreset) {
@@ -4459,6 +4671,9 @@ function toArchitectureCompareCsv(rows: ReturnType<typeof buildArchitectureCompa
     "architectureName",
     "topologyId",
     "status",
+    "fairnessStatus",
+    "fairnessReasons",
+    "mismatchedSettings",
     "runId",
     "runPath",
     "params",
@@ -4476,6 +4691,7 @@ function toArchitectureCompareCsv(rows: ReturnType<typeof buildArchitectureCompa
     "epochs",
     "trainSamples",
     "testSamples",
+    "batchSize",
     "replayStatus",
     "winner",
   ];
@@ -4659,6 +4875,10 @@ function formatRuntimeEstimate(value: number | null | undefined) {
 
 function formatEfficiency(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(1) : "-";
+}
+
+function shortId(value: string) {
+  return value.length > 7 ? value.slice(0, 7) : value;
 }
 
 function formatLearningRate(value: number | null | undefined) {

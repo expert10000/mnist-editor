@@ -16,6 +16,7 @@ type ComparisonPayload = {
   winnerSummary?: unknown;
   actionHistory?: unknown;
   lockedWinner?: unknown;
+  fairness?: unknown;
 };
 
 export async function GET(request: Request) {
@@ -50,6 +51,7 @@ export async function GET(request: Request) {
           winnerArchitectureId: stringField(session, "winnerArchitectureId") ?? "",
           architectureCount: Array.isArray(session.selectedArchitectureIds) ? session.selectedArchitectureIds.length : 0,
           bestAccuracy: bestAccuracyFromRows(Array.isArray(session.reportRows) ? session.reportRows : []),
+          fairnessStatus: isRecord(session.fairness) && typeof session.fairness.status === "string" ? session.fairness.status : undefined,
         };
       }),
     )
@@ -80,6 +82,7 @@ export async function POST(request: Request) {
     actionHistory: Array.isArray(payload.actionHistory) ? payload.actionHistory : [],
     lockedWinner: isRecord(payload.lockedWinner) ? payload.lockedWinner : null,
     reportRows,
+    fairness: isRecord(payload.fairness) ? payload.fairness : null,
   };
 
   await mkdir(directory, { recursive: true });
@@ -88,7 +91,7 @@ export async function POST(request: Request) {
     session.createdAt = existing.createdAt;
   }
   await writeFile(path.join(directory, "session.json"), JSON.stringify(session, null, 2), "utf8");
-  await writeFile(path.join(directory, "report.json"), JSON.stringify({ exportedAt: now, winnerSummary: session.winnerSummary, rows: reportRows }, null, 2), "utf8");
+  await writeFile(path.join(directory, "report.json"), JSON.stringify({ exportedAt: now, fairness: session.fairness, winnerSummary: session.winnerSummary, rows: reportRows }, null, 2), "utf8");
   await writeFile(path.join(directory, "report.csv"), toCsv(reportRows), "utf8");
   if (session.lockedWinner) {
     const winnerDirectory = path.join(directory, "winner");
@@ -123,6 +126,9 @@ function toCsv(rows: unknown[]) {
     "architectureName",
     "topologyId",
     "status",
+    "fairnessStatus",
+    "fairnessReasons",
+    "mismatchedSettings",
     "runId",
     "runPath",
     "params",
@@ -140,6 +146,7 @@ function toCsv(rows: unknown[]) {
     "epochs",
     "trainSamples",
     "testSamples",
+    "batchSize",
     "replayStatus",
     "winner",
   ];
